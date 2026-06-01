@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceBridge — 对话中</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body class="session-page">
+    <div class="session-container">
+        <header class="session-header">
+            <h1>VoiceBridge</h1>
+            <div class="session-info">
+                <span id="session-id-display"></span>
+                <span id="connection-status" class="dot offline"></span>
+            </div>
+        </header>
+
+        <main class="session-main">
+            <!-- Peer Status -->
+            <div class="peer-status">
+                <div class="peer-card" id="local-peer">
+                    <div class="peer-avatar">你</div>
+                    <div class="peer-lang" id="local-lang">中文</div>
+                    <div id="local-speaking" class="speaking-indicator">🔇</div>
+                </div>
+                <div class="peer-divider">⟷</div>
+                <div class="peer-card" id="remote-peer">
+                    <div class="peer-avatar">对方</div>
+                    <div class="peer-lang" id="remote-lang">English</div>
+                    <div id="remote-speaking" class="speaking-indicator">🔇</div>
+                </div>
+            </div>
+
+            <!-- Audio Visualizer -->
+            <div class="visualizer">
+                <canvas id="visualizer-canvas" width="400" height="80"></canvas>
+            </div>
+
+            <!-- Controls -->
+            <div class="controls">
+                <button id="mic-btn" class="btn btn-mic" onclick="toggleMic()">
+                    🎤 开始通话
+                </button>
+                <button id="mute-speaker-btn" class="btn btn-sm" onclick="toggleSpeaker()">
+                    🔊
+                </button>
+            </div>
+
+            <!-- Transcript -->
+            <div class="transcript" id="transcript">
+                <div class="transcript-empty">对话记录将显示在这里</div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/app.js"></script>
+    <script>
+        // Session page init
+        const params = new URLSearchParams(window.location.search);
+        const sid = params.get('sid');
+        if (sid) {
+            document.getElementById('session-id-display').textContent = '会话: ' + sid;
+            initSession(sid);
+        } else {
+            window.location.href = '/';
+        }
+    </script>
+</body>
+</html>

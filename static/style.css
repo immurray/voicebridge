@@ -1,0 +1,358 @@
+/* VoiceBridge Styles */
+
+:root {
+    --bg: #0f1117;
+    --card-bg: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e4e6eb;
+    --text-secondary: #8b8fa3;
+    --primary: #4f8cff;
+    --primary-hover: #3a6fd8;
+    --success: #34d399;
+    --danger: #f87171;
+    --radius: 12px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.container {
+    width: 100%;
+    max-width: 480px;
+    padding: 24px;
+}
+
+/* Header */
+header {
+    text-align: center;
+    margin-bottom: 32px;
+}
+
+header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--primary), #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    font-size: 14px;
+    margin-top: 4px;
+}
+
+/* Card */
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 16px;
+}
+
+.card h2 {
+    font-size: 18px;
+    margin-bottom: 16px;
+}
+
+/* Form */
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.input, .select {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.input:focus, .select:focus {
+    border-color: var(--primary);
+}
+
+/* Buttons */
+.btn {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    width: 100%;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: var(--primary-hover);
+}
+
+.btn-mic {
+    background: var(--primary);
+    color: white;
+    font-size: 16px;
+    padding: 14px;
+}
+
+.btn-sm {
+    width: auto;
+    padding: 8px 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+
+/* Divider */
+.divider {
+    text-align: center;
+    margin: 20px 0;
+    position: relative;
+}
+
+.divider::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 100%;
+    height: 1px;
+    background: var(--border);
+}
+
+.divider span {
+    background: var(--bg);
+    padding: 0 16px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    position: relative;
+}
+
+/* Result */
+.result {
+    margin-top: 12px;
+    padding: 10px;
+    background: var(--bg);
+    border-radius: 8px;
+    font-size: 13px;
+    word-break: break-all;
+}
+
+.result a {
+    color: var(--primary);
+}
+
+.hidden {
+    display: none;
+}
+
+/* Dot */
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.dot.online {
+    background: var(--success);
+}
+
+.dot.offline {
+    background: var(--danger);
+}
+
+/* Footer */
+footer {
+    text-align: center;
+    margin-top: 32px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+#status-text {
+    vertical-align: middle;
+}
+
+/* ========== Session Page ========== */
+
+.session-page {
+    align-items: flex-start;
+    padding-top: 0;
+}
+
+.session-container {
+    width: 100%;
+    max-width: 600px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.session-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 24px;
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+}
+
+.session-header h1 {
+    font-size: 18px;
+}
+
+.session-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.session-main {
+    flex: 1;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* Peer Status */
+.peer-status {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 24px;
+}
+
+.peer-card {
+    text-align: center;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    width: 120px;
+}
+
+.peer-avatar {
+    font-size: 24px;
+    margin-bottom: 4px;
+}
+
+.peer-lang {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.peer-divider {
+    font-size: 20px;
+    color: var(--text-secondary);
+}
+
+.speaking-indicator {
+    margin-top: 8px;
+    font-size: 16px;
+}
+
+.speaking-indicator.active {
+    color: var(--success);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* Visualizer */
+.visualizer {
+    display: flex;
+    justify-content: center;
+}
+
+.visualizer canvas {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 100%;
+    max-width: 400px;
+}
+
+/* Controls */
+.controls {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}
+
+/* Transcript */
+.transcript {
+    flex: 1;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.transcript-empty {
+    color: var(--text-secondary);
+    font-size: 14px;
+    text-align: center;
+    padding: 40px 0;
+}
+
+.transcript-entry {
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    background: var(--bg);
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.transcript-entry .speaker {
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--primary);
+    margin-bottom: 2px;
+}
+
+.transcript-entry .original {
+    color: var(--text-secondary);
+    font-size: 12px;
+    margin-top: 2px;
+}
