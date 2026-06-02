@@ -16,7 +16,6 @@ elevenlabs==1.50.0
 # Audio processing
 numpy==2.2.1
 pydub==0.25.1
-webrtcvad==2.0.10
 
 # Session management
 python-multipart==0.0.19
