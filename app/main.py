@@ -1,9 +1,10 @@
 # VoiceBridge v2 — Solo Translation App
 import os
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.ws import router as ws_router
 
@@ -16,6 +17,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+    """Add Cache-Control: no-cache to CSS/JS files to prevent Cloudflare caching."""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.endswith(('.css', '.js')):
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return response
+
+
+app.add_middleware(NoCacheStaticMiddleware)
 app.include_router(ws_router)
 
 
