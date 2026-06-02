@@ -7,6 +7,10 @@ let audioCtx = null;
 let isRunning = false;
 let history = [];
 let useSpeaker = true;
+let sentChunks = 0;
+let srvChunks = 0;
+let srvTrans = 0;
+let micLevel = 0;
 
 // DOM
 const startBtn = document.getElementById('startBtn');
@@ -56,7 +60,7 @@ async function start() {
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
-        setStatus('listening', '🎙 正在听...（请说话）');
+        updateDiag();
         ws.send(JSON.stringify({
             type: 'config',
             source_lang: sourceLang.value,
@@ -68,17 +72,17 @@ async function start() {
         if (typeof event.data === 'string') {
             const msg = JSON.parse(event.data);
             if (msg.type === 'result') {
-                setStatus('playing', '🔊 播放中...');
+                setStatus('playing', `🔊 播放中... "${msg.translated.slice(0, 20)}"`);
                 showResult(msg.original, msg.translated);
                 playAudio(msg.audio).then(() => {
-                    if (isRunning) setStatus('listening', '🎙 正在听...（请说话）');
+                    updateDiag();
                 }).catch((e) => {
                     console.error('Playback failed:', e);
-                    if (isRunning) setStatus('listening', '🎙 正在听...（⚠ 播放失败）');
+                    setStatus('listening', `🎙 听...（⚠ 播放失败）mic:${micLevel.toFixed(3)} 发:${sentChunks}`);
                 });
                 addHistory(msg.original, msg.translated);
             } else if (msg.type === 'status' && msg.state === 'recognized') {
-                setStatus('recognized', `🎯 识别到: "${msg.text}" → 翻译中...`);
+                setStatus('recognized', `🎯 "${msg.text.slice(0, 20)}" → 翻译中...`);
             } else if (msg.type === 'pong') {
                 // heartbeat
             }
@@ -103,17 +107,24 @@ async function start() {
 
     const source = audioCtx.createMediaStreamSource(stream);
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    // Connect to a zero-gain destination so ScriptProcessor fires in all browsers
+    const zeroGain = audioCtx.createGain();
+    zeroGain.gain.value = 0;
 
     source.connect(processor);
-    // Do NOT connect to destination — prevents echo/feedback
+    processor.connect(zeroGain);
+    zeroGain.connect(audioCtx.destination);
 
-    let sentChunks = 0;
+    sentChunks = 0;
+    srvChunks = 0;
+    srvTrans = 0;
+
     processor.onaudioprocess = (e) => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         const input = e.inputBuffer.getChannelData(0);
-        // Check if there's actual audio (not silence)
-        const rms = Math.sqrt(input.reduce((sum, v) => sum + v * v, 0) / input.length);
-        if (rms < 0.005) return; // Skip silence
+        // Calculate mic level (RMS)
+        micLevel = Math.sqrt(input.reduce((sum, v) => sum + v * v, 0) / input.length);
+        if (micLevel < 0.001) return; // Skip near-silence
         sentChunks++;
         const pcm = float32ToPCM16(input);
         ws.send(pcm.buffer);
@@ -123,17 +134,26 @@ async function start() {
     startBtn.textContent = '⏹ 停止';
     startBtn.classList.add('active');
 
-    // Diagnostic: show audio data flow every 3s
+    // Diagnostic: update every 2s
     const diagTimer = setInterval(() => {
         if (!isRunning) { clearInterval(diagTimer); return; }
-        if (sentChunks === 0) return;
-        fetch('/debug/status').then(r => r.json()).then(d => {
-            if (d.audio_chunks_received > 0) {
-                setStatus('listening', `🎙 正在听... 发送${sentChunks}块 → 服务器收到${d.audio_chunks_received}块 → 识别${d.transcripts_detected}次`);
-            }
-        }).catch(() => {});
-        sentChunks = 0;
-    }, 3000);
+        updateDiag();
+    }, 2000);
+}
+
+async function updateDiag() {
+    try {
+        const r = await fetch('/debug/status');
+        const d = await r.json();
+        srvChunks = d.audio_chunks_received || 0;
+        srvTrans = d.transcripts_detected || 0;
+    } catch(e) {}
+
+    const parts = [`mic: ${micLevel.toFixed(4)}`];
+    parts.push(`发: ${sentChunks}`);
+    parts.push(`收: ${srvChunks}`);
+    parts.push(`识: ${srvTrans}`);
+    setStatus('listening', `🎙 ${parts.join(' | ')}`);
 }
 
 function stop() {
@@ -175,11 +195,9 @@ async function playAudio(base64Audio) {
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
 
-    // Wait for audio to be playable
     await new Promise((resolve, reject) => {
         audio.oncanplaythrough = resolve;
         audio.onerror = reject;
-        // Timeout after 3 seconds
         setTimeout(() => reject(new Error('Audio load timeout')), 3000);
     });
 
