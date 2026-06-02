@@ -11,7 +11,11 @@ logger = logging.getLogger("voicebridge")
 router = APIRouter()
 
 # Diagnostic counters
-diag = {"audio_chunks": 0, "transcripts": 0, "translations": 0, "tts": 0}
+diag = {
+    "audio_chunks": 0, "transcripts": 0, "translations": 0, "tts": 0,
+    "last_asr_error": None, "last_translate_error": None, "last_tts_error": None,
+    "last_asr_text": None, "last_translated_text": None,
+}
 
 
 @router.get("/debug/status")
@@ -22,6 +26,11 @@ async def debug_status():
         "transcripts_detected": diag["transcripts"],
         "translations_done": diag["translations"],
         "tts_generated": diag["tts"],
+        "last_asr_text": diag["last_asr_text"],
+        "last_translated_text": diag["last_translated_text"],
+        "last_asr_error": diag["last_asr_error"],
+        "last_translate_error": diag["last_translate_error"],
+        "last_tts_error": diag["last_tts_error"],
         "deepgram_key": settings.deepgram_api_key[:8] + "..." if settings.deepgram_api_key else "MISSING",
         "openai_key": settings.openai_api_key[:8] + "..." if settings.openai_api_key else "MISSING",
         "elevenlabs_key": settings.elevenlabs_api_key[:8] + "..." if settings.elevenlabs_api_key else "MISSING",
@@ -56,6 +65,7 @@ async def translate_endpoint(ws: WebSocket):
                     continue
 
                 diag["transcripts"] += 1
+                diag["last_asr_text"] = transcript[:200]
                 logger.info(f"[ASR] {transcript[:80]}")
 
                 # Notify client: speech recognized
@@ -66,22 +76,41 @@ async def translate_endpoint(ws: WebSocket):
                 }, ensure_ascii=False))
 
                 # Step 2: Translate
-                translated = translate(transcript, source_lang, target_lang)
-                if not translated or translated.startswith("[Translation error"):
-                    logger.warning(f"[Translate] failed: {transcript[:50]}")
+                try:
+                    translated = translate(transcript, source_lang, target_lang)
+                except Exception as e:
+                    diag["last_translate_error"] = str(e)[:200]
+                    translated = ""
+                    logger.error(f"[Translate Exception] {e}")
+
+                if not translated:
+                    diag["last_translate_error"] = diag["last_translate_error"] or "Empty result from translate()"
+                    logger.warning(f"[Translate] Empty result for: {transcript[:50]}")
+                    continue
+
+                if translated.startswith("[Translation error"):
+                    diag["last_translate_error"] = translated[:200]
+                    logger.warning(f"[Translate] API error: {translated[:100]}")
                     continue
 
                 diag["translations"] += 1
+                diag["last_translated_text"] = translated[:200]
                 logger.info(f"[Translate] {source_lang}→{target_lang}: {translated[:80]}")
 
                 # Step 3: TTS
-                tts_audio = text_to_speech(
-                    translated,
-                    voice_id="",
-                    language=target_lang,
-                )
+                try:
+                    tts_audio = text_to_speech(
+                        translated,
+                        voice_id="",
+                        language=target_lang,
+                    )
+                except Exception as e:
+                    diag["last_tts_error"] = str(e)[:200]
+                    logger.error(f"[TTS Exception] {e}")
+                    continue
 
                 if not tts_audio or len(tts_audio) < 100:
+                    diag["last_tts_error"] = f"Empty/minimal audio: {len(tts_audio) if tts_audio else 0} bytes"
                     logger.warning("[TTS] No audio generated")
                     continue
 
@@ -140,7 +169,9 @@ async def _transcribe_chunk(audio_bytes: bytes, language: str) -> str:
             )
 
             if resp.status_code != 200:
-                logger.warning(f"[Deepgram] HTTP {resp.status_code}: {resp.text[:200]}")
+                err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                diag["last_asr_error"] = err
+                logger.warning(f"[Deepgram] {err}")
                 return ""
 
             result = resp.json()
@@ -150,6 +181,7 @@ async def _transcribe_chunk(audio_bytes: bytes, language: str) -> str:
             return transcript.strip()
 
     except Exception as e:
+        diag["last_asr_error"] = str(e)[:200]
         logger.error(f"[Deepgram Error] {e}")
         return ""
 
