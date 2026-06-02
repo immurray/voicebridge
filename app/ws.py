@@ -10,11 +10,15 @@ from app.config import settings
 logger = logging.getLogger("voicebridge")
 router = APIRouter()
 
+# 1 second of audio at 16kHz 16-bit mono = 32000 bytes (4 chunks × ~256ms)
+BUFFER_TARGET = 32000
+
 # Diagnostic counters
 diag = {
     "audio_chunks": 0, "transcripts": 0, "translations": 0, "tts": 0,
     "last_asr_error": None, "last_translate_error": None, "last_tts_error": None,
     "last_asr_text": None, "last_translated_text": None,
+    "buffer_size": 0,
 }
 
 
@@ -26,6 +30,7 @@ async def debug_status():
         "transcripts_detected": diag["transcripts"],
         "translations_done": diag["translations"],
         "tts_generated": diag["tts"],
+        "buffer_size": diag["buffer_size"],
         "last_asr_text": diag["last_asr_text"],
         "last_translated_text": diag["last_translated_text"],
         "last_asr_error": diag["last_asr_error"],
@@ -39,12 +44,15 @@ async def debug_status():
 
 @router.websocket("/ws/translate")
 async def translate_endpoint(ws: WebSocket):
-    """WebSocket 端点：单人实时翻译管线"""
+    """WebSocket 端点：单人实时翻译管线（带音频缓存）"""
     await ws.accept()
     logger.info("[WS] Solo client connected")
 
     source_lang = "zh"
     target_lang = "es"
+
+    # 音频缓存：攒够 1 秒再发给 Deepgram
+    audio_buffer = bytearray()
 
     try:
         while True:
@@ -53,79 +61,19 @@ async def translate_endpoint(ws: WebSocket):
             if "bytes" in data:
                 audio_bytes = data["bytes"]
                 diag["audio_chunks"] += 1
+
                 if len(audio_bytes) < 100:
                     continue
 
-                from app.translate import translate
-                from app.tts import text_to_speech
+                audio_buffer.extend(audio_bytes)
+                diag["buffer_size"] = len(audio_buffer)
 
-                # Step 1: ASR
-                transcript = await _transcribe_chunk(audio_bytes, source_lang)
-                if not transcript or not transcript.strip():
-                    continue
-
-                diag["transcripts"] += 1
-                diag["last_asr_text"] = transcript[:200]
-                logger.info(f"[ASR] {transcript[:80]}")
-
-                # Notify client: speech recognized
-                await ws.send_text(json.dumps({
-                    "type": "status",
-                    "state": "recognized",
-                    "text": transcript,
-                }, ensure_ascii=False))
-
-                # Step 2: Translate
-                try:
-                    translated = translate(transcript, source_lang, target_lang)
-                except Exception as e:
-                    diag["last_translate_error"] = str(e)[:200]
-                    translated = ""
-                    logger.error(f"[Translate Exception] {e}")
-
-                if not translated:
-                    diag["last_translate_error"] = diag["last_translate_error"] or "Empty result from translate()"
-                    logger.warning(f"[Translate] Empty result for: {transcript[:50]}")
-                    continue
-
-                if translated.startswith("[Translation error"):
-                    diag["last_translate_error"] = translated[:200]
-                    logger.warning(f"[Translate] API error: {translated[:100]}")
-                    continue
-
-                diag["translations"] += 1
-                diag["last_translated_text"] = translated[:200]
-                logger.info(f"[Translate] {source_lang}→{target_lang}: {translated[:80]}")
-
-                # Step 3: TTS
-                try:
-                    tts_audio = text_to_speech(
-                        translated,
-                        voice_id="",
-                        language=target_lang,
+                # 攒够 ~1 秒音频就处理
+                if len(audio_buffer) >= BUFFER_TARGET:
+                    await _process_buffer(
+                        ws, bytes(audio_buffer), source_lang, target_lang
                     )
-                except Exception as e:
-                    diag["last_tts_error"] = str(e)[:200]
-                    logger.error(f"[TTS Exception] {e}")
-                    continue
-
-                if not tts_audio or len(tts_audio) < 100:
-                    diag["last_tts_error"] = f"Empty/minimal audio: {len(tts_audio) if tts_audio else 0} bytes"
-                    logger.warning("[TTS] No audio generated")
-                    continue
-
-                diag["tts"] += 1
-                logger.info(f"[TTS] {len(tts_audio)} bytes generated")
-
-                # Step 4: Send result
-                await ws.send_text(json.dumps({
-                    "type": "result",
-                    "original": transcript,
-                    "translated": translated,
-                    "audio": base64.b64encode(tts_audio).decode(),
-                    "source_lang": source_lang,
-                    "target_lang": target_lang,
-                }, ensure_ascii=False))
+                    audio_buffer = bytearray()
 
             elif "text" in data:
                 msg = json.loads(data["text"])
@@ -145,6 +93,80 @@ async def translate_endpoint(ws: WebSocket):
         logger.error(f"[WS Error] {e}")
 
 
+async def _process_buffer(ws, audio_bytes: bytes, source_lang: str, target_lang: str):
+    """处理缓存的音频：ASR → 翻译 → TTS → 发送结果"""
+    from app.translate import translate
+    from app.tts import text_to_speech
+
+    # Step 1: ASR
+    transcript = await _transcribe_chunk(audio_bytes, source_lang)
+    if not transcript or not transcript.strip():
+        return
+
+    diag["transcripts"] += 1
+    diag["last_asr_text"] = transcript[:200]
+    logger.info(f"[ASR] {transcript[:80]} (buf={len(audio_bytes)}B)")
+
+    # Notify client: speech recognized
+    await ws.send_text(json.dumps({
+        "type": "status",
+        "state": "recognized",
+        "text": transcript,
+    }, ensure_ascii=False))
+
+    # Step 2: Translate
+    try:
+        translated = translate(transcript, source_lang, target_lang)
+    except Exception as e:
+        diag["last_translate_error"] = str(e)[:200]
+        translated = ""
+        logger.error(f"[Translate Exception] {e}")
+
+    if not translated:
+        diag["last_translate_error"] = diag["last_translate_error"] or "Empty result from translate()"
+        logger.warning(f"[Translate] Empty result for: {transcript[:50]}")
+        return
+
+    if translated.startswith("[Translation error"):
+        diag["last_translate_error"] = translated[:200]
+        logger.warning(f"[Translate] API error: {translated[:100]}")
+        return
+
+    diag["translations"] += 1
+    diag["last_translated_text"] = translated[:200]
+    logger.info(f"[Translate] {source_lang}→{target_lang}: {translated[:80]}")
+
+    # Step 3: TTS
+    try:
+        tts_audio = text_to_speech(
+            translated,
+            voice_id="",
+            language=target_lang,
+        )
+    except Exception as e:
+        diag["last_tts_error"] = str(e)[:200]
+        logger.error(f"[TTS Exception] {e}")
+        return
+
+    if not tts_audio or len(tts_audio) < 100:
+        diag["last_tts_error"] = f"Empty/minimal audio: {len(tts_audio) if tts_audio else 0} bytes"
+        logger.warning("[TTS] No audio generated")
+        return
+
+    diag["tts"] += 1
+    logger.info(f"[TTS] {len(tts_audio)} bytes generated")
+
+    # Step 4: Send result
+    await ws.send_text(json.dumps({
+        "type": "result",
+        "original": transcript,
+        "translated": translated,
+        "audio": base64.b64encode(tts_audio).decode(),
+        "source_lang": source_lang,
+        "target_lang": target_lang,
+    }, ensure_ascii=False))
+
+
 async def _transcribe_chunk(audio_bytes: bytes, language: str) -> str:
     """Transcribe PCM audio using Deepgram REST."""
     import httpx
@@ -160,10 +182,11 @@ async def _transcribe_chunk(audio_bytes: bytes, language: str) -> str:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with httpx.AsyncClient(timeout=8) as client:
             resp = await client.post(
                 f"https://api.deepgram.com/v1/listen?"
-                f"model=nova-2&language={dg_lang}&smart_format=true",
+                f"model=nova-2&language={dg_lang}&smart_format=true"
+                f"&encoding=linear16&sample_rate={settings.sample_rate}",
                 headers=headers,
                 content=wav_bytes,
             )
