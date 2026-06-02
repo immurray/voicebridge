@@ -43,11 +43,12 @@ async function start() {
     }
 
     // WebSocket
+    setStatus('connecting', '● 连接中...');
     ws = new WebSocket(WS_URL);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
-        setStatus('listening', '● 正在听...');
+        setStatus('listening', '🎙 正在听...（请说话）');
         ws.send(JSON.stringify({
             type: 'config',
             source_lang: sourceLang.value,
@@ -59,9 +60,17 @@ async function start() {
         if (typeof event.data === 'string') {
             const msg = JSON.parse(event.data);
             if (msg.type === 'result') {
+                setStatus('playing', '🔊 播放中...');
                 showResult(msg.original, msg.translated);
-                playAudio(msg.audio);
+                playAudio(msg.audio).then(() => {
+                    if (isRunning) setStatus('listening', '🎙 正在听...（请说话）');
+                }).catch((e) => {
+                    console.error('Playback failed:', e);
+                    if (isRunning) setStatus('listening', '🎙 正在听...（⚠ 播放失败）');
+                });
                 addHistory(msg.original, msg.translated);
+            } else if (msg.type === 'status' && msg.state === 'recognized') {
+                setStatus('recognized', `🎯 识别到: "${msg.text}" → 翻译中...`);
             } else if (msg.type === 'pong') {
                 // heartbeat
             }
@@ -69,24 +78,33 @@ async function start() {
     };
 
     ws.onclose = () => {
-        if (isRunning) setStatus('idle', '○ 连接断开，点击重试');
+        if (isRunning) setStatus('error', '⚠ 连接断开，点击重试');
     };
 
     ws.onerror = () => {
-        setStatus('idle', '○ 连接失败');
+        setStatus('error', '⚠ 连接失败，检查网络');
     };
 
     // Audio capture
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+
+    // CRITICAL: Resume AudioContext (browsers suspend it until user gesture)
+    if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+    }
+
     const source = audioCtx.createMediaStreamSource(stream);
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
     source.connect(processor);
-    processor.connect(audioCtx.destination);
+    // Do NOT connect to destination — prevents echo/feedback
 
     processor.onaudioprocess = (e) => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         const input = e.inputBuffer.getChannelData(0);
+        // Check if there's actual audio (not silence)
+        const rms = Math.sqrt(input.reduce((sum, v) => sum + v * v, 0) / input.length);
+        if (rms < 0.005) return; // Skip silence
         const pcm = float32ToPCM16(input);
         ws.send(pcm.buffer);
     };
@@ -113,7 +131,6 @@ function stop() {
     startBtn.textContent = '🎤 开始翻译';
     startBtn.classList.remove('active');
     setStatus('idle', '○ 已就绪');
-    currentCard.classList.add('hidden');
 }
 
 function setStatus(state, text) {
@@ -125,34 +142,28 @@ function showResult(original, translated) {
     currentCard.classList.remove('hidden');
     currentOriginal.textContent = original;
     currentTranslated.textContent = translated;
-    setStatus('translating', '● 翻译完成');
-    setTimeout(() => {
-        if (isRunning) setStatus('listening', '● 正在听...');
-    }, 1500);
 }
 
-function playAudio(base64Audio) {
-    try {
-        const binary = atob(base64Audio);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+async function playAudio(base64Audio) {
+    const binary = atob(base64Audio);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-        const blob = new Blob([bytes], { type: 'audio/mp3' });
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
+    const blob = new Blob([bytes], { type: 'audio/mp3' });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
 
-        if (!useSpeaker) {
-            // @ts-ignore — setSinkId may not be in all browsers
-            if (audio.setSinkId) {
-                audio.setSinkId('none').catch(() => {});
-            }
-        }
+    // Wait for audio to be playable
+    await new Promise((resolve, reject) => {
+        audio.oncanplaythrough = resolve;
+        audio.onerror = reject;
+        // Timeout after 3 seconds
+        setTimeout(() => reject(new Error('Audio load timeout')), 3000);
+    });
 
-        audio.play().catch(() => {});
-        audio.onended = () => URL.revokeObjectURL(url);
-    } catch (e) {
-        console.error('Audio playback error:', e);
-    }
+    await audio.play();
+    await new Promise(resolve => { audio.onended = resolve; });
+    URL.revokeObjectURL(url);
 }
 
 function addHistory(original, translated) {

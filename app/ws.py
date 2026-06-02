@@ -1,6 +1,7 @@
 # VoiceBridge v2 WebSocket — Solo Translation Pipeline
 import json
 import struct
+import base64
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -31,12 +32,21 @@ async def translate_endpoint(ws: WebSocket):
                 from app.translate import translate
                 from app.tts import text_to_speech
 
+                # Step 1: ASR
                 transcript = await _transcribe_chunk(audio_bytes, source_lang)
                 if not transcript or not transcript.strip():
                     continue
 
                 logger.info(f"[ASR] {transcript[:80]}")
 
+                # Notify client: speech recognized
+                await ws.send_text(json.dumps({
+                    "type": "status",
+                    "state": "recognized",
+                    "text": transcript,
+                }, ensure_ascii=False))
+
+                # Step 2: Translate
                 translated = translate(transcript, source_lang, target_lang)
                 if not translated or translated.startswith("[Translation error"):
                     logger.warning(f"[Translate] failed: {transcript[:50]}")
@@ -44,6 +54,7 @@ async def translate_endpoint(ws: WebSocket):
 
                 logger.info(f"[Translate] {source_lang}→{target_lang}: {translated[:80]}")
 
+                # Step 3: TTS
                 tts_audio = text_to_speech(
                     translated,
                     voice_id="",
@@ -51,9 +62,12 @@ async def translate_endpoint(ws: WebSocket):
                 )
 
                 if not tts_audio or len(tts_audio) < 100:
+                    logger.warning("[TTS] No audio generated")
                     continue
 
-                import base64
+                logger.info(f"[TTS] {len(tts_audio)} bytes generated")
+
+                # Step 4: Send result
                 await ws.send_text(json.dumps({
                     "type": "result",
                     "original": transcript,

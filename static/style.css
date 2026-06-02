@@ -203,9 +203,27 @@ h1 {
     color: var(--brand);
     background: rgba(31, 122, 236, 0.08);
 }
-.status.translating {
+.status.connecting {
     color: #f59e0b;
     background: rgba(245, 158, 11, 0.08);
+}
+.status.recognized {
+    color: #8b5cf6;
+    background: rgba(139, 92, 246, 0.08);
+}
+.status.playing {
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.08);
+    animation: pulse-status 0.8s ease-in-out infinite;
+}
+.status.error {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.08);
+}
+
+@keyframes pulse-status {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 
 /* Current Translation Card */
