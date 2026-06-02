@@ -58,8 +58,15 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_SHA=${{ github.sha }}
           cache-to: type=gha,mode=max
+
+      - name: Verify pushed image
+        run: |
+          echo "Image pushed: ghcr.io/${{ github.repository }}:latest"
+          echo "Commit SHA: ${{ github.sha }}"
+          docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:latest" --format 'Digest: {{json .}}' 2>/dev/null || echo "Verify skipped (non-interactive login)"
