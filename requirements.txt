@@ -10,8 +10,8 @@ deepgram-sdk==3.7.0
 # Translation (OpenAI compatible)
 openai==1.58.1
 
-# TTS
-elevenlabs==1.50.0
+# TTS — Microsoft Edge (free, no API key)
+edge-tts==6.1.14
 
 # Audio processing
 numpy==2.2.1

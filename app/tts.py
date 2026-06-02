@@ -1,68 +1,54 @@
-# VoiceBridge — ElevenLabs TTS + Voice Clone
-from app.config import settings
+# VoiceBridge — Edge TTS (Microsoft, free, no API key)
+import asyncio
+import logging
 
-# Default voices per language (fallback when no cloned voice)
-DEFAULT_VOICES = {
-    "en": "21m00Tcm4TlvDq8ikWAM",  # Rachel (natural American English)
-    "zh": "EXAVITQu4vr4xnSDxMaL",  # Bella (warm female, decent Chinese)
+logger = logging.getLogger("voicebridge")
+
+# Voice mapping per language
+VOICES = {
+    "zh": "zh-CN-XiaoxiaoNeural",       # 晓晓 — natural female Chinese
+    "en": "en-US-JennyNeural",          # Jenny — natural female English
+    "es": "es-ES-ElviraNeural",         # Elvira — natural female Spanish
+    "ar": "ar-SA-ZariyahNeural",        # Zariyah — natural female Arabic (Saudi)
+    "pt": "pt-BR-FranciscaNeural",      # Francisca — natural female Portuguese
 }
 
-
-def _get_el_client():
-    from elevenlabs import ElevenLabs
-    return ElevenLabs(api_key=settings.elevenlabs_api_key)
+# Cache: reuse voice objects to avoid re-creating
+_voice_cache: dict = {}
 
 
-def get_default_voice_id(language: str) -> str:
-    return DEFAULT_VOICES.get(language, DEFAULT_VOICES["en"])
+async def text_to_speech(text: str, voice_id: str = "", language: str = "en") -> bytes:
+    """Convert text to MP3 speech using Microsoft Edge TTS.
 
-
-def create_cloned_voice(name: str, audio_samples_path: str) -> str | None:
-    try:
-        client = _get_el_client()
-        with open(audio_samples_path, "rb") as f:
-            voice = client.clone(name=name, files=[f])
-        return voice.voice_id
-    except Exception as e:
-        print(f"[Voice Clone Error] {e}")
-        return None
-
-
-def text_to_speech(text: str, voice_id: str = "", language: str = "en") -> bytes:
+    Returns MP3 audio bytes, or empty bytes on failure.
+    `voice_id` is ignored — voice is selected by language.
+    """
     if not text.strip():
         return b""
 
-    vid = voice_id or get_default_voice_id(language)
+    voice = VOICES.get(language, VOICES["en"])
 
     try:
-        client = _get_el_client()
-        audio_generator = client.text_to_speech.convert_as_stream(
-            voice_id=vid,
-            model_id="eleven_turbo_v2_5",
-            text=text,
-            output_format="pcm_16000",
-        )
+        import edge_tts
 
+        communicate = edge_tts.Communicate(text, voice)
         audio_bytes = b""
-        for chunk in audio_generator:
-            if chunk:
-                audio_bytes += chunk
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_bytes += chunk["data"]
+            elif chunk["type"] == "WordBoundary":
+                pass  # timing events, ignore
 
-        return _pcm_to_wav(audio_bytes, sample_rate=16000)
+        if not audio_bytes:
+            logger.warning(f"[EdgeTTS] No audio generated for: {text[:50]}")
+            return b""
 
-    except Exception as e:
-        print(f"[TTS Error] {e}")
+        logger.info(f"[EdgeTTS] {len(audio_bytes)} bytes, {voice}, text={text[:40]}")
+        return audio_bytes
+
+    except ImportError:
+        logger.error("[EdgeTTS] edge-tts package not installed")
         return b""
-
-
-def _pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 16000) -> bytes:
-    import struct
-
-    num_samples = len(pcm_bytes) // 2
-    wav_header = struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF", 36 + len(pcm_bytes), b"WAVE", b"fmt ",
-        16, 1, 1, sample_rate, sample_rate * 2, 2, 16,
-        b"data", len(pcm_bytes),
-    )
-    return wav_header + pcm_bytes
+    except Exception as e:
+        logger.error(f"[EdgeTTS] {e}")
+        return b""

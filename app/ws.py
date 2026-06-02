@@ -138,9 +138,8 @@ async def _process_buffer(ws, audio_bytes: bytes, source_lang: str, target_lang:
 
     # Step 3: TTS
     try:
-        tts_audio = text_to_speech(
+        tts_audio = await text_to_speech(
             translated,
-            voice_id="",
             language=target_lang,
         )
     except Exception as e:

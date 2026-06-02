@@ -11,10 +11,7 @@ ENV BUILD_COMMIT=${GIT_SHA}
 # Unique label forces fresh image digest on every build
 LABEL build_ts=${BUILD_TS}
 
-# Install system deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libportaudio2 \
-    && rm -rf /var/lib/apt/lists/*
+# edge-tts is pure Python — no system deps needed
 
 # Python deps
 COPY requirements.txt .
