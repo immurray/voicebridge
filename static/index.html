@@ -1,61 +1,68 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceBridge — 实时语音翻译</title>
+    <title>VoiceBridge — 实时翻译</title>
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>VoiceBridge</h1>
-            <p class="subtitle">实时双向语音翻译 — 保留你的声音</p>
-        </header>
+        <h1>🌐 VoiceBridge</h1>
+        <p class="subtitle">实时语音翻译 · 单人模式</p>
 
-        <main>
-            <!-- Create Session -->
-            <div class="card" id="create-card">
-                <h2>创建会话</h2>
-                <div class="form-group">
-                    <label>我说</label>
-                    <select id="create-lang" class="select">
-                        <option value="zh">中文</option>
-                        <option value="en">English</option>
-                    </select>
-                </div>
-                <button class="btn btn-primary" onclick="createSession()">
-                    创建会话
-                </button>
-                <div id="create-result" class="result hidden"></div>
+        <!-- Language Selection -->
+        <div class="lang-row">
+            <div class="lang-group">
+                <label>我说</label>
+                <select id="sourceLang">
+                    <option value="zh" selected>中文</option>
+                    <option value="en">English</option>
+                    <option value="es">Español</option>
+                    <option value="ar">العربية</option>
+                    <option value="pt">Português</option>
+                </select>
             </div>
-
-            <div class="divider"><span>或</span></div>
-
-            <!-- Join Session -->
-            <div class="card" id="join-card">
-                <h2>加入会话</h2>
-                <div class="form-group">
-                    <label>会话 ID</label>
-                    <input type="text" id="join-session-id" class="input" placeholder="输入对方分享的会话 ID">
-                </div>
-                <div class="form-group">
-                    <label>我说</label>
-                    <select id="join-lang" class="select">
-                        <option value="en">English</option>
-                        <option value="zh">中文</option>
-                    </select>
-                </div>
-                <button class="btn btn-primary" onclick="joinSession()">
-                    加入会话
-                </button>
-                <div id="join-result" class="result hidden"></div>
+            <div class="swap-icon">↔</div>
+            <div class="lang-group">
+                <label>对方说</label>
+                <select id="targetLang">
+                    <option value="zh">中文</option>
+                    <option value="en">English</option>
+                    <option value="es" selected>Español</option>
+                    <option value="ar">العربية</option>
+                    <option value="pt">Português</option>
+                </select>
             </div>
-        </main>
+        </div>
 
-        <footer>
-            <p>VoiceBridge v0.1 · <span id="status-dot" class="dot offline"></span> <span id="status-text">未连接</span></p>
-        </footer>
+        <!-- Audio Output -->
+        <div class="output-row">
+            <button id="outputToggle" class="btn-outline" title="切换音频输出">
+                🔊 扬声器
+            </button>
+        </div>
+
+        <!-- Main Button -->
+        <button id="startBtn" class="btn-main">
+            🎤 开始翻译
+        </button>
+
+        <!-- Status -->
+        <div id="status" class="status idle">○ 已就绪</div>
+
+        <!-- Current Translation -->
+        <div id="currentCard" class="card hidden">
+            <div class="card-label">当前翻译</div>
+            <div id="currentOriginal" class="card-original"></div>
+            <div id="currentTranslated" class="card-translated"></div>
+        </div>
+
+        <!-- History -->
+        <div id="historySection" class="history-section">
+            <h3>翻译记录</h3>
+            <div id="historyList"></div>
+        </div>
     </div>
 
     <script src="/app.js"></script>

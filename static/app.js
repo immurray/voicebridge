@@ -1,395 +1,183 @@
-// VoiceBridge Frontend — Web Audio API + WebSocket
+// VoiceBridge v2 — Solo Translation
+const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/translate`;
 
-// ============ State ============
 let ws = null;
-let audioContext = null;
-let mediaStream = null;
-let sourceNode = null;
-let processorNode = null;
-let isMicOn = false;
-let isSpeakerOn = true;
-let sessionId = null;
-let peerId = null;
-let myLanguage = null;
-let remoteLanguage = null;
+let stream = null;
+let audioCtx = null;
+let isRunning = false;
+let history = [];
+let useSpeaker = true;
 
-// Audio config
-const SAMPLE_RATE = 16000;
-const CHUNK_MS = 200;          // Send audio every 200ms
-const VAD_SILENCE_MS = 500;    // VAD silence threshold
+// DOM
+const startBtn = document.getElementById('startBtn');
+const statusEl = document.getElementById('status');
+const currentCard = document.getElementById('currentCard');
+const currentOriginal = document.getElementById('currentOriginal');
+const currentTranslated = document.getElementById('currentTranslated');
+const historyList = document.getElementById('historyList');
+const outputToggle = document.getElementById('outputToggle');
+const sourceLang = document.getElementById('sourceLang');
+const targetLang = document.getElementById('targetLang');
 
-// ============ Session Management ============
-
-async function createSession() {
-    const lang = document.getElementById('create-lang').value;
-
-    try {
-        const resp = await fetch('/api/session/create', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ language: lang }),
-        });
-        const data = await resp.json();
-
-        if (data.error) {
-            alert('创建失败: ' + data.error);
-            return;
-        }
-
-        const resultEl = document.getElementById('create-result');
-        resultEl.classList.remove('hidden');
-        resultEl.innerHTML = `
-            <strong>会话已创建!</strong><br>
-            ID: <code>${data.session_id}</code><br>
-            <a href="${data.share_link}">打开对话页面 →</a>
-        `;
-
-        // Auto-redirect to session
-        window.location.href = data.share_link;
-    } catch (e) {
-        alert('网络错误: ' + e.message);
+// Start/Stop
+startBtn.addEventListener('click', () => {
+    if (isRunning) {
+        stop();
+    } else {
+        start();
     }
-}
+});
 
-async function joinSession() {
-    const sessionId = document.getElementById('join-session-id').value.trim();
-    const lang = document.getElementById('join-lang').value;
+// Audio output toggle
+outputToggle.addEventListener('click', () => {
+    useSpeaker = !useSpeaker;
+    outputToggle.textContent = useSpeaker ? '🔊 扬声器' : '🎧 耳机';
+});
 
-    if (!sessionId) {
-        alert('请输入会话 ID');
+async function start() {
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+        alert('需要麦克风权限才能使用翻译功能');
         return;
     }
 
-    try {
-        const resp = await fetch(`/api/session/join/${sessionId}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ language: lang }),
-        });
-        const data = await resp.json();
-
-        if (data.error) {
-            alert('加入失败: ' + data.error);
-            return;
-        }
-
-        window.location.href = `/session.html?sid=${sessionId}&pid=${data.peer_id}&lang=${data.language}`;
-    } catch (e) {
-        alert('网络错误: ' + e.message);
-    }
-}
-
-// ============ Session Init ============
-
-async function initSession(sid) {
-    sessionId = sid;
-    peerId = new URLSearchParams(window.location.search).get('pid') ||
-              'peer_' + Math.random().toString(36).slice(2, 8);
-    myLanguage = new URLSearchParams(window.location.search).get('lang') || 'zh';
-    remoteLanguage = myLanguage === 'zh' ? 'en' : 'zh';
-
-    document.getElementById('local-lang').textContent =
-        myLanguage === 'zh' ? '中文' : 'English';
-    document.getElementById('remote-lang').textContent =
-        remoteLanguage === 'zh' ? '中文' : 'English';
-
-    // Connect WebSocket
-    await connectWebSocket();
-
-    // Request microphone on mic button click
-    document.getElementById('mic-btn').addEventListener('click', toggleMic);
-}
-
-// ============ WebSocket ============
-
-async function connectWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/${sessionId}/${peerId}`;
-
-    ws = new WebSocket(wsUrl);
+    // WebSocket
+    ws = new WebSocket(WS_URL);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
-        setConnectionStatus(true);
-        console.log('[WS] Connected');
+        setStatus('listening', '● 正在听...');
+        ws.send(JSON.stringify({
+            type: 'config',
+            source_lang: sourceLang.value,
+            target_lang: targetLang.value,
+        }));
     };
 
-    ws.onmessage = async (event) => {
-        if (event.data instanceof ArrayBuffer) {
-            // Received translated audio — play it
-            await playAudio(event.data);
-        } else {
-            // Text message (VAD events, etc.)
-            try {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'vad_event') {
-                    updateRemoteSpeaking(msg.speaking);
-                }
-            } catch (e) { /* ignore */ }
+    ws.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'result') {
+                showResult(msg.original, msg.translated);
+                playAudio(msg.audio);
+                addHistory(msg.original, msg.translated);
+            } else if (msg.type === 'pong') {
+                // heartbeat
+            }
         }
     };
 
     ws.onclose = () => {
-        setConnectionStatus(false);
-        console.log('[WS] Disconnected — reconnecting in 2s...');
-        setTimeout(connectWebSocket, 2000);
+        if (isRunning) setStatus('idle', '○ 连接断开，点击重试');
     };
 
-    ws.onerror = (e) => {
-        console.error('[WS] Error:', e);
+    ws.onerror = () => {
+        setStatus('idle', '○ 连接失败');
     };
+
+    // Audio capture
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const source = audioCtx.createMediaStreamSource(stream);
+    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+    source.connect(processor);
+    processor.connect(audioCtx.destination);
+
+    processor.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const input = e.inputBuffer.getChannelData(0);
+        const pcm = float32ToPCM16(input);
+        ws.send(pcm.buffer);
+    };
+
+    isRunning = true;
+    startBtn.textContent = '⏹ 停止';
+    startBtn.classList.add('active');
 }
 
-function setConnectionStatus(connected) {
-    const dot = document.getElementById('connection-status');
-    if (dot) {
-        dot.className = 'dot ' + (connected ? 'online' : 'offline');
+function stop() {
+    if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
     }
+    if (audioCtx) {
+        audioCtx.close();
+        audioCtx = null;
+    }
+    if (ws) {
+        ws.close();
+        ws = null;
+    }
+    isRunning = false;
+    startBtn.textContent = '🎤 开始翻译';
+    startBtn.classList.remove('active');
+    setStatus('idle', '○ 已就绪');
+    currentCard.classList.add('hidden');
 }
 
-// ============ Audio Capture ============
+function setStatus(state, text) {
+    statusEl.className = `status ${state}`;
+    statusEl.textContent = text;
+}
 
-async function startMic() {
-    if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)({
-            sampleRate: SAMPLE_RATE,
-        });
-    }
+function showResult(original, translated) {
+    currentCard.classList.remove('hidden');
+    currentOriginal.textContent = original;
+    currentTranslated.textContent = translated;
+    setStatus('translating', '● 翻译完成');
+    setTimeout(() => {
+        if (isRunning) setStatus('listening', '● 正在听...');
+    }, 1500);
+}
 
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-            channelCount: 1,
-            sampleRate: SAMPLE_RATE,
-            echoCancellation: true,
-            noiseSuppression: true,
-        },
-    });
+function playAudio(base64Audio) {
+    try {
+        const binary = atob(base64Audio);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-    sourceNode = audioContext.createMediaStreamSource(mediaStream);
+        const blob = new Blob([bytes], { type: 'audio/mp3' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
 
-    // ScriptProcessor for raw PCM access
-    processorNode = audioContext.createScriptProcessor(4096, 1, 1);
-
-    let audioBuffer = [];
-    let isSpeaking = false;
-    let silenceTimer = null;
-
-    processorNode.onaudioprocess = (event) => {
-        if (!isMicOn || ws?.readyState !== WebSocket.OPEN) return;
-
-        const input = event.inputBuffer.getChannelData(0);
-
-        // Convert Float32 to Int16 PCM
-        const pcmData = new Int16Array(input.length);
-        for (let i = 0; i < input.length; i++) {
-            pcmData[i] = Math.max(-32768, Math.min(32767, input[i] * 32768));
-        }
-
-        // VAD: check if audio level exceeds threshold
-        const rms = Math.sqrt(pcmData.reduce((sum, v) => sum + v * v, 0) / pcmData.length);
-
-        if (rms > 500) {  // Speech detected
-            isSpeaking = true;
-            updateLocalSpeaking(true);
-            clearTimeout(silenceTimer);
-
-            // Send VAD event
-            ws.send(JSON.stringify({
-                type: 'vad_event',
-                speaking: true,
-            }));
-        } else if (isSpeaking) {
-            // Start silence timer
-            if (!silenceTimer) {
-                silenceTimer = setTimeout(() => {
-                    isSpeaking = false;
-                    updateLocalSpeaking(false);
-                    ws.send(JSON.stringify({
-                        type: 'vad_event',
-                        speaking: false,
-                    }));
-                    silenceTimer = null;
-                }, VAD_SILENCE_MS);
+        if (!useSpeaker) {
+            // @ts-ignore — setSinkId may not be in all browsers
+            if (audio.setSinkId) {
+                audio.setSinkId('none').catch(() => {});
             }
         }
 
-        // Send audio chunk
-        if (isSpeaking || audioBuffer.length > 0) {
-            audioBuffer.push(...pcmData);
-
-            // Send every CHUNK_MS worth of audio
-            const samplesPerChunk = (SAMPLE_RATE * CHUNK_MS) / 1000;
-            while (audioBuffer.length >= samplesPerChunk) {
-                const chunk = audioBuffer.splice(0, samplesPerChunk);
-                const chunkBuffer = new Int16Array(chunk).buffer;
-                if (ws?.readyState === WebSocket.OPEN) {
-                    ws.send(chunkBuffer);
-                }
-            }
-        }
-    };
-
-    sourceNode.connect(processorNode);
-    processorNode.connect(audioContext.destination);
-
-    // Visualizer
-    startVisualizer();
-
-    isMicOn = true;
-    document.getElementById('mic-btn').textContent = '🔴 通话中...';
-    document.getElementById('mic-btn').style.background = 'var(--danger)';
-}
-
-function stopMic() {
-    if (processorNode) {
-        processorNode.disconnect();
-        processorNode = null;
-    }
-    if (sourceNode) {
-        sourceNode.disconnect();
-        sourceNode = null;
-    }
-    if (mediaStream) {
-        mediaStream.getTracks().forEach(t => t.stop());
-        mediaStream = null;
-    }
-    if (audioContext) {
-        audioContext.close();
-        audioContext = null;
-    }
-
-    isMicOn = false;
-    updateLocalSpeaking(false);
-    document.getElementById('mic-btn').textContent = '🎤 开始通话';
-    document.getElementById('mic-btn').style.background = 'var(--primary)';
-    stopVisualizer();
-}
-
-async function toggleMic() {
-    if (isMicOn) {
-        stopMic();
-    } else {
-        try {
-            await startMic();
-        } catch (e) {
-            alert('无法访问麦克风: ' + e.message);
-        }
+        audio.play().catch(() => {});
+        audio.onended = () => URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error('Audio playback error:', e);
     }
 }
 
-// ============ Audio Playback ============
+function addHistory(original, translated) {
+    history.unshift({ original, translated, time: new Date() });
+    if (history.length > 20) history.pop();
 
-async function playAudio(audioData) {
-    if (!isSpeakerOn) return;
+    historyList.innerHTML = history.map(h =>
+        `<div class="history-item">
+            <div class="hi-original">${escapeHtml(h.original)}</div>
+            <div class="hi-translated">${escapeHtml(h.translated)}</div>
+        </div>`
+    ).join('');
+}
 
-    // audioData is raw PCM Int16 — convert to AudioBuffer and play
-    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-    const pcm = new Int16Array(audioData);
-    const floatData = new Float32Array(pcm.length);
-
-    for (let i = 0; i < pcm.length; i++) {
-        floatData[i] = pcm[i] / 32768;
+function float32ToPCM16(float32) {
+    const pcm = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i]));
+        pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-
-    const audioBuffer = ctx.createBuffer(1, floatData.length, SAMPLE_RATE);
-    audioBuffer.getChannelData(0).set(floatData);
-
-    const source = ctx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(ctx.destination);
-    source.start(0);
-
-    // Auto-close context after playback
-    source.onended = () => {
-        setTimeout(() => ctx.close(), 1000);
-    };
+    return new Uint8Array(pcm.buffer);
 }
 
-// ============ Visualizer ============
-
-let visualizerInterval = null;
-
-function startVisualizer() {
-    const canvas = document.getElementById('visualizer-canvas');
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-
-    visualizerInterval = setInterval(() => {
-        ctx.fillStyle = '#1a1d27';
-        ctx.fillRect(0, 0, width, height);
-
-        if (isMicOn && audioContext) {
-            // Simple animated bars when mic is active
-            const barCount = 20;
-            const barWidth = (width / barCount) - 2;
-
-            for (let i = 0; i < barCount; i++) {
-                const barHeight = Math.random() * height * 0.8 * (isMicOn ? 1 : 0.3);
-                ctx.fillStyle = '#4f8cff';
-                ctx.fillRect(
-                    i * (barWidth + 2),
-                    height - barHeight,
-                    barWidth,
-                    barHeight
-                );
-            }
-        }
-    }, 100);
-}
-
-function stopVisualizer() {
-    if (visualizerInterval) {
-        clearInterval(visualizerInterval);
-        visualizerInterval = null;
-    }
-}
-
-// ============ VAD Indicators ============
-
-function updateLocalSpeaking(speaking) {
-    const el = document.getElementById('local-speaking');
-    if (el) {
-        el.className = 'speaking-indicator' + (speaking ? ' active' : '');
-        el.textContent = speaking ? '🔊' : '🔇';
-    }
-}
-
-function updateRemoteSpeaking(speaking) {
-    const el = document.getElementById('remote-speaking');
-    if (el) {
-        el.className = 'speaking-indicator' + (speaking ? ' active' : '');
-        el.textContent = speaking ? '🔊' : '🔇';
-    }
-}
-
-// ============ Speaker Toggle ============
-
-function toggleSpeaker() {
-    isSpeakerOn = !isSpeakerOn;
-    document.getElementById('mute-speaker-btn').textContent = isSpeakerOn ? '🔊' : '🔇';
-}
-
-// ============ Transcript ============
-
-function addTranscript(speaker, text, originalText) {
-    const container = document.getElementById('transcript');
-    if (!container) return;
-
-    // Remove empty state
-    const empty = container.querySelector('.transcript-empty');
-    if (empty) empty.remove();
-
-    const entry = document.createElement('div');
-    entry.className = 'transcript-entry';
-    entry.innerHTML = `
-        <div class="speaker">${speaker}</div>
-        <div>${text}</div>
-        ${originalText ? `<div class="original">原文: ${originalText}</div>` : ''}
-    `;
-
-    container.appendChild(entry);
-    container.scrollTop = container.scrollHeight;
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
