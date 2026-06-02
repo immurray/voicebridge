@@ -136,34 +136,35 @@ async def _process_buffer(ws, audio_bytes: bytes, source_lang: str, target_lang:
     diag["last_translated_text"] = translated[:200]
     logger.info(f"[Translate] {source_lang}→{target_lang}: {translated[:80]}")
 
-    # Step 3: TTS
+    # Step 3: TTS — non-blocking, result always sent to client
+    tts_audio = b""
     try:
         tts_audio = await text_to_speech(
             translated,
             language=target_lang,
-        )
+        ) or b""
     except Exception as e:
         diag["last_tts_error"] = str(e)[:200]
         logger.error(f"[TTS Exception] {e}")
-        return
 
-    if not tts_audio or len(tts_audio) < 100:
-        diag["last_tts_error"] = f"Empty/minimal audio: {len(tts_audio) if tts_audio else 0} bytes"
-        logger.warning("[TTS] No audio generated")
-        return
+    if tts_audio and len(tts_audio) >= 100:
+        diag["tts"] += 1
+        logger.info(f"[TTS] {len(tts_audio)} bytes generated")
+    else:
+        logger.warning(f"[TTS] No audio — sending text-only result")
 
-    diag["tts"] += 1
-    logger.info(f"[TTS] {len(tts_audio)} bytes generated")
-
-    # Step 4: Send result
-    await ws.send_text(json.dumps({
+    # Step 4: Send result (always, even if TTS failed)
+    result_msg = {
         "type": "result",
         "original": transcript,
         "translated": translated,
-        "audio": base64.b64encode(tts_audio).decode(),
         "source_lang": source_lang,
         "target_lang": target_lang,
-    }, ensure_ascii=False))
+    }
+    if tts_audio and len(tts_audio) >= 100:
+        result_msg["audio"] = base64.b64encode(tts_audio).decode()
+
+    await ws.send_text(json.dumps(result_msg, ensure_ascii=False))
 
 
 async def _transcribe_chunk(audio_bytes: bytes, language: str) -> str:
