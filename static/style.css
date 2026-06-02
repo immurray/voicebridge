@@ -23,9 +23,71 @@ body {
 }
 
 .container {
-    max-width: 480px;
+    max-width: 600px;
     width: 100%;
     padding: 24px 20px;
+}
+
+/* Usage Guide */
+.guide {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    cursor: pointer;
+}
+
+.guide summary {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--brand);
+    list-style: none;
+}
+
+.guide summary::-webkit-details-marker { display: none; }
+
+.guide-content {
+    margin-top: 12px;
+    font-size: 14px;
+    color: var(--text);
+}
+
+.guide-content h4 {
+    font-size: 14px;
+    margin: 12px 0 6px;
+    color: var(--text);
+}
+
+.guide-diagram {
+    background: #f0f4ff;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 12px;
+    line-height: 1.8;
+    color: #374151;
+    overflow-x: auto;
+    white-space: pre;
+    margin: 8px 0;
+}
+
+.guide-content ol {
+    padding-left: 20px;
+    margin: 8px 0;
+}
+
+.guide-content ol li {
+    margin-bottom: 6px;
+    line-height: 1.6;
+}
+
+.guide-tip {
+    background: #fef3c7;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: #92400e;
+    margin-top: 12px;
 }
 
 h1 {
