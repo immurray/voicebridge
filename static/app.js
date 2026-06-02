@@ -5,6 +5,7 @@ let ws = null;
 let stream = null;
 let audioCtx = null;
 let isRunning = false;
+let isBusy = false;  // Don't overwrite status during translation
 let history = [];
 let useSpeaker = true;
 let sentChunks = 0;
@@ -31,16 +32,8 @@ fetch('/version')
     })
     .catch(() => {});
 
-// Start/Stop
-startBtn.addEventListener('click', () => {
-    if (isRunning) {
-        stop();
-    } else {
-        start();
-    }
-});
+startBtn.addEventListener('click', () => isRunning ? stop() : start());
 
-// Audio output toggle
 outputToggle.addEventListener('click', () => {
     useSpeaker = !useSpeaker;
     outputToggle.textContent = useSpeaker ? '🔊 扬声器' : '🎧 耳机';
@@ -50,67 +43,52 @@ async function start() {
     try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
-        alert('需要麦克风权限才能使用翻译功能');
+        alert('需要麦克风权限');
         return;
     }
 
-    // WebSocket
     setStatus('connecting', '● 连接中...');
     ws = new WebSocket(WS_URL);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
         updateDiag();
-        ws.send(JSON.stringify({
-            type: 'config',
-            source_lang: sourceLang.value,
-            target_lang: targetLang.value,
-        }));
+        ws.send(JSON.stringify({ type: 'config', source_lang: sourceLang.value, target_lang: targetLang.value }));
     };
 
     ws.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'result') {
-                setStatus('playing', `🔊 播放中... "${msg.translated.slice(0, 20)}"`);
-                showResult(msg.original, msg.translated);
-                playAudio(msg.audio).then(() => {
-                    updateDiag();
-                }).catch((e) => {
-                    console.error('Playback failed:', e);
-                    setStatus('listening', `🎙 听...（⚠ 播放失败）mic:${micLevel.toFixed(3)} 发:${sentChunks}`);
-                });
-                addHistory(msg.original, msg.translated);
-            } else if (msg.type === 'status' && msg.state === 'recognized') {
-                setStatus('recognized', `🎯 "${msg.text.slice(0, 20)}" → 翻译中...`);
-            } else if (msg.type === 'pong') {
-                // heartbeat
-            }
+        if (typeof event.data !== 'string') return;
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'result') {
+            isBusy = true;
+            setStatus('playing', `🔊 "${msg.translated.slice(0, 30)}"`);
+            showResult(msg.original, msg.translated);
+            addHistory(msg.original, msg.translated);
+            playAudio(msg.audio).then(() => {
+                isBusy = false;
+                updateDiag();
+            }).catch(() => {
+                isBusy = false;
+                setStatus('listening', `🎙 播放失败 | mic:${micLevel.toFixed(2)} 发:${sentChunks}`);
+            });
+        } else if (msg.type === 'status' && msg.state === 'recognized') {
+            isBusy = true;
+            setStatus('recognized', `🎯 识别: "${msg.text.slice(0, 30)}"`);
         }
     };
 
-    ws.onclose = () => {
-        if (isRunning) setStatus('error', '⚠ 连接断开，点击重试');
-    };
-
-    ws.onerror = () => {
-        setStatus('error', '⚠ 连接失败，检查网络');
-    };
+    ws.onclose = () => { if (isRunning) setStatus('error', '⚠ 连接断开'); };
+    ws.onerror = () => { setStatus('error', '⚠ 连接失败'); };
 
     // Audio capture
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-
-    // CRITICAL: Resume AudioContext (browsers suspend it until user gesture)
-    if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-    }
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
 
     const source = audioCtx.createMediaStreamSource(stream);
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-    // Connect to a zero-gain destination so ScriptProcessor fires in all browsers
     const zeroGain = audioCtx.createGain();
     zeroGain.gain.value = 0;
-
     source.connect(processor);
     processor.connect(zeroGain);
     zeroGain.connect(audioCtx.destination);
@@ -118,26 +96,25 @@ async function start() {
     sentChunks = 0;
     srvChunks = 0;
     srvTrans = 0;
+    isBusy = false;
 
     processor.onaudioprocess = (e) => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         const input = e.inputBuffer.getChannelData(0);
-        // Calculate mic level (RMS)
         micLevel = Math.sqrt(input.reduce((sum, v) => sum + v * v, 0) / input.length);
-        if (micLevel < 0.001) return; // Skip near-silence
+        if (micLevel < 0.0005) return;
         sentChunks++;
-        const pcm = float32ToPCM16(input);
-        ws.send(pcm.buffer);
+        ws.send(float32ToPCM16(input).buffer);
     };
 
     isRunning = true;
     startBtn.textContent = '⏹ 停止';
     startBtn.classList.add('active');
 
-    // Diagnostic: update every 2s
+    // Diagnostic — only update when idle
     const diagTimer = setInterval(() => {
         if (!isRunning) { clearInterval(diagTimer); return; }
-        updateDiag();
+        if (!isBusy) updateDiag();
     }, 2000);
 }
 
@@ -148,27 +125,13 @@ async function updateDiag() {
         srvChunks = d.audio_chunks_received || 0;
         srvTrans = d.transcripts_detected || 0;
     } catch(e) {}
-
-    const parts = [`mic: ${micLevel.toFixed(4)}`];
-    parts.push(`发: ${sentChunks}`);
-    parts.push(`收: ${srvChunks}`);
-    parts.push(`识: ${srvTrans}`);
-    setStatus('listening', `🎙 ${parts.join(' | ')}`);
+    setStatus('listening', `🎙 mic:${micLevel.toFixed(2)} | 发:${sentChunks} | 收:${srvChunks} | 识:${srvTrans}`);
 }
 
 function stop() {
-    if (stream) {
-        stream.getTracks().forEach(t => t.stop());
-        stream = null;
-    }
-    if (audioCtx) {
-        audioCtx.close();
-        audioCtx = null;
-    }
-    if (ws) {
-        ws.close();
-        ws = null;
-    }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
+    if (ws) { ws.close(); ws = null; }
     isRunning = false;
     startBtn.textContent = '🎤 开始翻译';
     startBtn.classList.remove('active');
@@ -190,45 +153,32 @@ async function playAudio(base64Audio) {
     const binary = atob(base64Audio);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
     const blob = new Blob([bytes], { type: 'audio/mp3' });
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
-
     await new Promise((resolve, reject) => {
         audio.oncanplaythrough = resolve;
         audio.onerror = reject;
-        setTimeout(() => reject(new Error('Audio load timeout')), 3000);
+        setTimeout(() => reject(new Error('timeout')), 3000);
     });
-
     await audio.play();
     await new Promise(resolve => { audio.onended = resolve; });
     URL.revokeObjectURL(url);
 }
 
 function addHistory(original, translated) {
-    history.unshift({ original, translated, time: new Date() });
+    history.unshift({ original, translated });
     if (history.length > 20) history.pop();
-
     historyList.innerHTML = history.map(h =>
-        `<div class="history-item">
-            <div class="hi-original">${escapeHtml(h.original)}</div>
-            <div class="hi-translated">${escapeHtml(h.translated)}</div>
-        </div>`
+        `<div class="history-item"><div class="hi-original">${h.original}</div><div class="hi-translated">${h.translated}</div></div>`
     ).join('');
 }
 
-function float32ToPCM16(float32) {
-    const pcm = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-        const s = Math.max(-1, Math.min(1, float32[i]));
+function float32ToPCM16(f32) {
+    const pcm = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+        const s = Math.max(-1, Math.min(1, f32[i]));
         pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
     return new Uint8Array(pcm.buffer);
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
 }
