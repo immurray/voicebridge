@@ -3,9 +3,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Build arg for cache busting
+# Build args
 ARG GIT_SHA=dev
+ARG BUILD_TS=0
 ENV BUILD_COMMIT=${GIT_SHA}
+
+# Unique label forces fresh image digest on every build
+LABEL build_ts=${BUILD_TS}
 
 # Install system deps
 RUN apt-get update && apt-get install -y --no-install-recommends \

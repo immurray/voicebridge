@@ -63,6 +63,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_SHA=${{ github.sha }}
+            BUILD_TS=${{ github.run_id }}-${{ github.run_attempt }}
           cache-to: type=gha,mode=max
 
       - name: Verify pushed image
