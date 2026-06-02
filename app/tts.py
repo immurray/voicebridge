@@ -1,64 +1,72 @@
-# VoiceBridge — Edge TTS (Microsoft, free, no API key)
+# VoiceBridge — Google TTS (gTTS, free, no API key)
+import asyncio
 import logging
+from functools import partial
 
 logger = logging.getLogger("voicebridge")
 
-# Voice mapping per language
-VOICES = {
-    "zh": "zh-CN-XiaoxiaoNeural",       # 晓晓 — natural female Chinese
-    "en": "en-US-JennyNeural",          # Jenny — natural female English
-    "es": "es-ES-ElviraNeural",         # Elvira — natural female Spanish
-    "ar": "ar-SA-ZariyahNeural",        # Zariyah — natural female Arabic (Saudi)
-    "pt": "pt-BR-FranciscaNeural",      # Francisca — natural female Portuguese
+# Language mapping for gTTS
+LANG_MAP = {
+    "zh": "zh-CN",
+    "en": "en",
+    "es": "es",
+    "ar": "ar",
+    "pt": "pt",
 }
 
 
 async def text_to_speech(text: str, voice_id: str = "", language: str = "en") -> bytes:
-    """Convert text to MP3 speech using Microsoft Edge TTS.
+    """Convert text to MP3 speech using Google TTS (gTTS).
 
     Returns MP3 audio bytes, or empty bytes on failure.
-    Reports errors to app.ws.diag for /debug/status visibility.
     """
     if not text.strip():
         return b""
 
-    voice = VOICES.get(language, VOICES["en"])
+    tld = "com"
+    lang = LANG_MAP.get(language, "en")
 
-    # Try importing edge-tts
     try:
-        import edge_tts
+        from gtts import gTTS
     except ImportError as e:
-        err = f"edge-tts import failed: {e}"
-        logger.error(f"[EdgeTTS] {err}")
+        err = f"gTTS import failed: {e}"
+        logger.error(f"[gTTS] {err}")
         _set_diag_error(err)
         return b""
 
-    # Generate speech
     try:
-        communicate = edge_tts.Communicate(text, voice)
-        audio_bytes = b""
-        chunk_count = 0
-        async for chunk in communicate.stream():
-            chunk_count += 1
-            if chunk["type"] == "audio":
-                audio_bytes += chunk["data"]
-            elif chunk["type"] == "WordBoundary":
-                pass
-
-        if not audio_bytes:
-            err = f"No audio from stream: {chunk_count} chunks, voice={voice}, text={text[:50]}"
-            logger.warning(f"[EdgeTTS] {err}")
+        # gTTS is synchronous — run in thread pool
+        loop = asyncio.get_running_loop()
+        tts = await loop.run_in_executor(
+            None,
+            partial(_generate, text, lang, tld),
+        )
+        if tts:
+            logger.info(f"[gTTS] {len(tts)}B, lang={lang}, text={text[:40]}")
+            return tts
+        else:
+            err = f"gTTS returned None: lang={lang}, text={text[:50]}"
+            logger.warning(f"[gTTS] {err}")
             _set_diag_error(err)
             return b""
 
-        logger.info(f"[EdgeTTS] {len(audio_bytes)}B, {voice}, text={text[:40]}")
-        return audio_bytes
-
     except Exception as e:
-        err = f"edge-tts exception: {type(e).__name__}: {e}"
-        logger.error(f"[EdgeTTS] {err}")
+        err = f"gTTS exception: {type(e).__name__}: {e}"
+        logger.error(f"[gTTS] {err}")
         _set_diag_error(err)
         return b""
+
+
+def _generate(text: str, lang: str, tld: str) -> bytes | None:
+    """Synchronous gTTS call to run in executor."""
+    from gtts import gTTS
+    from io import BytesIO
+
+    tts = gTTS(text=text, lang=lang, tld=tld, slow=False)
+    buf = BytesIO()
+    tts.write_to_fp(buf)
+    buf.seek(0)
+    return buf.read()
 
 
 def _set_diag_error(msg: str):
