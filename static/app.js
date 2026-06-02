@@ -19,6 +19,14 @@ const outputToggle = document.getElementById('outputToggle');
 const sourceLang = document.getElementById('sourceLang');
 const targetLang = document.getElementById('targetLang');
 
+// Fetch version on load
+fetch('/version')
+    .then(r => r.json())
+    .then(v => {
+        document.getElementById('buildVersion').textContent = `v${v.version} (${v.build.slice(0, 7)})`;
+    })
+    .catch(() => {});
+
 // Start/Stop
 startBtn.addEventListener('click', () => {
     if (isRunning) {
@@ -99,12 +107,14 @@ async function start() {
     source.connect(processor);
     // Do NOT connect to destination — prevents echo/feedback
 
+    let sentChunks = 0;
     processor.onaudioprocess = (e) => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         const input = e.inputBuffer.getChannelData(0);
         // Check if there's actual audio (not silence)
         const rms = Math.sqrt(input.reduce((sum, v) => sum + v * v, 0) / input.length);
         if (rms < 0.005) return; // Skip silence
+        sentChunks++;
         const pcm = float32ToPCM16(input);
         ws.send(pcm.buffer);
     };
@@ -112,6 +122,18 @@ async function start() {
     isRunning = true;
     startBtn.textContent = '⏹ 停止';
     startBtn.classList.add('active');
+
+    // Diagnostic: show audio data flow every 3s
+    const diagTimer = setInterval(() => {
+        if (!isRunning) { clearInterval(diagTimer); return; }
+        if (sentChunks === 0) return;
+        fetch('/debug/status').then(r => r.json()).then(d => {
+            if (d.audio_chunks_received > 0) {
+                setStatus('listening', `🎙 正在听... 发送${sentChunks}块 → 服务器收到${d.audio_chunks_received}块 → 识别${d.transcripts_detected}次`);
+            }
+        }).catch(() => {});
+        sentChunks = 0;
+    }, 3000);
 }
 
 function stop() {

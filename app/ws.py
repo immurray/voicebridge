@@ -10,6 +10,23 @@ from app.config import settings
 logger = logging.getLogger("voicebridge")
 router = APIRouter()
 
+# Diagnostic counters
+diag = {"audio_chunks": 0, "transcripts": 0, "translations": 0, "tts": 0}
+
+
+@router.get("/debug/status")
+async def debug_status():
+    """Return diagnostic counters for ASR pipeline."""
+    return {
+        "audio_chunks_received": diag["audio_chunks"],
+        "transcripts_detected": diag["transcripts"],
+        "translations_done": diag["translations"],
+        "tts_generated": diag["tts"],
+        "deepgram_key": settings.deepgram_api_key[:8] + "..." if settings.deepgram_api_key else "MISSING",
+        "openai_key": settings.openai_api_key[:8] + "..." if settings.openai_api_key else "MISSING",
+        "elevenlabs_key": settings.elevenlabs_api_key[:8] + "..." if settings.elevenlabs_api_key else "MISSING",
+    }
+
 
 @router.websocket("/ws/translate")
 async def translate_endpoint(ws: WebSocket):
@@ -26,6 +43,7 @@ async def translate_endpoint(ws: WebSocket):
 
             if "bytes" in data:
                 audio_bytes = data["bytes"]
+                diag["audio_chunks"] += 1
                 if len(audio_bytes) < 100:
                     continue
 
@@ -37,6 +55,7 @@ async def translate_endpoint(ws: WebSocket):
                 if not transcript or not transcript.strip():
                     continue
 
+                diag["transcripts"] += 1
                 logger.info(f"[ASR] {transcript[:80]}")
 
                 # Notify client: speech recognized
@@ -52,6 +71,7 @@ async def translate_endpoint(ws: WebSocket):
                     logger.warning(f"[Translate] failed: {transcript[:50]}")
                     continue
 
+                diag["translations"] += 1
                 logger.info(f"[Translate] {source_lang}→{target_lang}: {translated[:80]}")
 
                 # Step 3: TTS
@@ -65,6 +85,7 @@ async def translate_endpoint(ws: WebSocket):
                     logger.warning("[TTS] No audio generated")
                     continue
 
+                diag["tts"] += 1
                 logger.info(f"[TTS] {len(tts_audio)} bytes generated")
 
                 # Step 4: Send result
