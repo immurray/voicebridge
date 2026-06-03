@@ -27,11 +27,7 @@ class VoiceProcessor extends AudioWorkletProcessor {
             }
         }
 
-        // Passthrough audio to output (user can hear themselves)
-        const output = outputs[0];
-        if (output && output[0]) {
-            output[0].set(channel);
-        }
+        // Output silence (user hears translated audio separately, via WebSocket → playAudio)
 
         return true;  // Keep processor alive
     }

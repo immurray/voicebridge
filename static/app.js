@@ -105,7 +105,11 @@ async function start() {
                 ws.send(pcm);
             };
             gainNode.connect(workletNode);
-            workletNode.connect(audioCtx.destination);
+            // Mute passthrough — user should NOT hear their own voice
+            const muteGain = audioCtx.createGain();
+            muteGain.gain.value = 0;
+            workletNode.connect(muteGain);
+            muteGain.connect(audioCtx.destination);
         } catch (e) {
             console.warn('AudioWorklet failed, using ScriptProcessorNode fallback:', e.message);
             setupScriptProcessor(gainNode);
