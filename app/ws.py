@@ -81,11 +81,10 @@ async def translate_endpoint(ws: WebSocket):
             return (target_lang, source_lang)
         return None
 
-    async def start_dg_stream():
-        nonlocal dg_ws
-
+    def _build_dg_url() -> str:
+        """Build Deepgram WebSocket URL from current settings."""
         if bidirectional:
-            dg_url = (
+            return (
                 f"wss://api.deepgram.com/v1/listen"
                 f"?model=nova-2"
                 f"&language=multi"
@@ -94,11 +93,10 @@ async def translate_endpoint(ws: WebSocket):
                 f"&encoding=linear16"
                 f"&sample_rate=16000"
                 f"&channels=1"
-                f"&endpointing=10000"
             )
         else:
             dg_lang = LANG_MAP_DG.get(source_lang, "zh-CN")
-            dg_url = (
+            return (
                 f"wss://api.deepgram.com/v1/listen"
                 f"?model=nova-2"
                 f"&language={dg_lang}"
@@ -107,128 +105,130 @@ async def translate_endpoint(ws: WebSocket):
                 f"&encoding=linear16"
                 f"&sample_rate=16000"
                 f"&channels=1"
-                f"&endpointing=10000"
             )
 
+    async def dg_loop():
+        """Keep Deepgram connection alive for the entire session.
+        Auto-reconnects on drop. No endpointing — stays open indefinitely."""
+        nonlocal dg_ws
         import websockets as ws_lib
+        from app.translate import translate
+        from app.tts import text_to_speech
 
-        try:
-            async with ws_lib.connect(
-                dg_url,
-                additional_headers={"Authorization": f"Token {settings.deepgram_api_key}"},
-                ping_interval=5,
-                close_timeout=5,
-            ) as dg:
-                dg_ws = dg
-                mode = "bidirectional" if bidirectional else f"lang={source_lang}"
-                logger.info(f"[Deepgram] Connected, {mode}")
+        while True:
+            dg_url = _build_dg_url()
+            try:
+                async with ws_lib.connect(
+                    dg_url,
+                    additional_headers={"Authorization": f"Token {settings.deepgram_api_key}"},
+                    ping_interval=5,
+                    close_timeout=5,
+                ) as dg:
+                    dg_ws = dg
+                    mode = "bidirectional" if bidirectional else f"lang={source_lang}"
+                    logger.info(f"[Deepgram] Connected ({mode})")
 
-                from app.translate import translate
-                from app.tts import text_to_speech
-
-                async for raw in dg:
-                    try:
-                        result = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
-
-                    channel = result.get("channel", {})
-                    alternatives = channel.get("alternatives", [])
-                    if not alternatives:
-                        continue
-
-                    alt = alternatives[0]
-                    transcript = alt.get("transcript", "").strip()
-                    if not transcript:
-                        continue
-
-                    is_final = result.get("is_final", False)
-                    speech_final = result.get("speech_final", False)
-
-                    # Resolve translation direction
-                    if bidirectional:
-                        direction = _resolve_direction(transcript)
-                        if direction is None:
-                            # Can't determine direction — send interim to show what was heard
-                            if is_final or speech_final:
-                                await ws.send_text(json.dumps({
-                                    "type": "interim",
-                                    "text": transcript,
-                                    "lang": _detect_lang(transcript) or "?",
-                                }, ensure_ascii=False))
-                            continue
-                        src, tgt = direction
-                    else:
-                        src, tgt = source_lang, target_lang
-
-                    if is_final or speech_final:
-                        diag["transcripts"] += 1
-                        diag["last_asr_text"] = transcript[:200]
-                        logger.info(f"[ASR Final] {src}→{tgt}: {transcript[:80]}")
-
-                        await ws.send_text(json.dumps({
-                            "type": "recognized",
-                            "text": transcript,
-                            "source_lang": src,
-                            "target_lang": tgt,
-                        }, ensure_ascii=False))
-
-                        # Translate
+                    async for raw in dg:
                         try:
-                            translated = translate(transcript, src, tgt)
-                        except Exception as e:
-                            diag["last_translate_error"] = str(e)[:200]
+                            result = json.loads(raw)
+                        except json.JSONDecodeError:
                             continue
 
-                        if not translated or translated.startswith("[Translation error"):
-                            diag["last_translate_error"] = translated or "Empty result"
+                        channel = result.get("channel", {})
+                        alternatives = channel.get("alternatives", [])
+                        if not alternatives:
                             continue
 
-                        diag["translations"] += 1
-                        diag["last_translated_text"] = translated[:200]
+                        alt = alternatives[0]
+                        transcript = alt.get("transcript", "").strip()
+                        if not transcript:
+                            continue
 
-                        # TTS
-                        tts_audio = b""
-                        try:
-                            tts_audio = await text_to_speech(translated, language=tgt) or b""
-                        except Exception as e:
-                            diag["last_tts_error"] = str(e)[:200]
+                        is_final = result.get("is_final", False)
+                        speech_final = result.get("speech_final", False)
 
-                        if tts_audio and len(tts_audio) >= 100:
-                            diag["tts"] += 1
-
-                        result_msg = {
-                            "type": "result",
-                            "original": transcript,
-                            "translated": translated,
-                            "source_lang": src,
-                            "target_lang": tgt,
-                        }
-                        if tts_audio and len(tts_audio) >= 100:
-                            result_msg["audio"] = base64.b64encode(tts_audio).decode()
-
-                        await ws.send_text(json.dumps(result_msg, ensure_ascii=False))
-                    else:
-                        # Interim
-                        msg = {"type": "interim", "text": transcript}
+                        # Resolve translation direction
                         if bidirectional:
-                            msg["source_lang"] = src
-                            msg["target_lang"] = tgt
-                        await ws.send_text(json.dumps(msg, ensure_ascii=False))
+                            direction = _resolve_direction(transcript)
+                            if direction is None:
+                                if is_final or speech_final:
+                                    await ws.send_text(json.dumps({
+                                        "type": "interim",
+                                        "text": transcript,
+                                        "lang": _detect_lang(transcript) or "?",
+                                    }, ensure_ascii=False))
+                                continue
+                            src, tgt = direction
+                        else:
+                            src, tgt = source_lang, target_lang
 
-        except ws_lib.exceptions.ConnectionClosed:
-            logger.info("[Deepgram] Connection closed")
-        except Exception as e:
-            logger.error(f"[Deepgram Error] {e}")
-            diag["last_asr_error"] = str(e)[:200]
-            await ws.send_text(json.dumps({
-                "type": "error",
-                "message": f"ASR connection failed: {e}"
-            }))
-        finally:
-            dg_ws = None
+                        if is_final or speech_final:
+                            diag["transcripts"] += 1
+                            diag["last_asr_text"] = transcript[:200]
+                            logger.info(f"[ASR Final] {src}→{tgt}: {transcript[:80]}")
+
+                            await ws.send_text(json.dumps({
+                                "type": "recognized",
+                                "text": transcript,
+                                "source_lang": src,
+                                "target_lang": tgt,
+                            }, ensure_ascii=False))
+
+                            # Translate
+                            try:
+                                translated = translate(transcript, src, tgt)
+                            except Exception as e:
+                                diag["last_translate_error"] = str(e)[:200]
+                                continue
+
+                            if not translated or translated.startswith("[Translation error"):
+                                diag["last_translate_error"] = translated or "Empty result"
+                                continue
+
+                            diag["translations"] += 1
+                            diag["last_translated_text"] = translated[:200]
+
+                            # TTS
+                            tts_audio = b""
+                            try:
+                                tts_audio = await text_to_speech(translated, language=tgt) or b""
+                            except Exception as e:
+                                diag["last_tts_error"] = str(e)[:200]
+
+                            if tts_audio and len(tts_audio) >= 100:
+                                diag["tts"] += 1
+
+                            result_msg = {
+                                "type": "result",
+                                "original": transcript,
+                                "translated": translated,
+                                "source_lang": src,
+                                "target_lang": tgt,
+                            }
+                            if tts_audio and len(tts_audio) >= 100:
+                                result_msg["audio"] = base64.b64encode(tts_audio).decode()
+
+                            await ws.send_text(json.dumps(result_msg, ensure_ascii=False))
+                        else:
+                            msg = {"type": "interim", "text": transcript}
+                            if bidirectional:
+                                msg["source_lang"] = src
+                                msg["target_lang"] = tgt
+                            await ws.send_text(json.dumps(msg, ensure_ascii=False))
+
+            except ws_lib.exceptions.ConnectionClosed:
+                logger.info("[Deepgram] Connection closed, reconnecting...")
+            except Exception as e:
+                logger.error(f"[Deepgram] Error: {e}, reconnecting in 1s...")
+                diag["last_asr_error"] = str(e)[:200]
+                await asyncio.sleep(1)
+            finally:
+                dg_ws = None
 
     try:
+        # Start Deepgram connection on first audio
+        dg_started = False
+
         while True:
             data = await ws.receive()
 
@@ -239,15 +239,10 @@ async def translate_endpoint(ws: WebSocket):
 
                 diag["audio_chunks"] += 1
 
-                if dg_task is None or dg_task.done():
-                    dg_task = asyncio.create_task(start_dg_stream())
-                    # Wait for Deepgram connection to be ready (up to 5s)
-                    for _ in range(50):
-                        if dg_ws is not None:
-                            break
-                        await asyncio.sleep(0.1)
-                    else:
-                        logger.warning("[WS] Deepgram connection timeout, dropping chunk")
+                # Start Deepgram connection once, keep alive for entire session
+                if not dg_started:
+                    dg_task = asyncio.create_task(dg_loop())
+                    dg_started = True
 
                 if dg_ws:
                     try:
@@ -266,10 +261,11 @@ async def translate_endpoint(ws: WebSocket):
                     target_lang = msg.get("target_lang", target_lang)
                     bidirectional = msg.get("bidirectional", bidirectional)
                     logger.info(f"[Config] {source_lang}→{target_lang} bidirectional={bidirectional}")
+                    # Restart with new settings
                     if dg_task and not dg_task.done():
                         dg_task.cancel()
-                    dg_task = None
-                    dg_ws = None
+                    dg_task = asyncio.create_task(dg_loop())
+                    dg_started = True
 
     except WebSocketDisconnect:
         logger.info("[WS] Client disconnected")
