@@ -10,6 +10,7 @@ let sentChunks = 0;
 let micLevel = 0;
 let micGain = 2.0;  // Mic gain multiplier
 let transcriptHistory = [];
+let currentSource = null;  // Active TTS source for interruption
 
 // DOM
 const startBtn = document.getElementById('startBtn');
@@ -162,6 +163,7 @@ function setupScriptProcessor(sourceNode) {
 
 function stop() {
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (currentSource) { try { currentSource.stop(); } catch(e) {} currentSource = null; }
     if (audioCtx) { audioCtx.close(); audioCtx = null; }
     if (ws) { ws.close(); ws = null; }
     isRunning = false;
@@ -183,6 +185,13 @@ function showResult(original, translated) {
 
 async function playAudio(base64Audio) {
     if (!base64Audio) return;
+
+    // Interrupt current TTS — new speech takes priority
+    if (currentSource) {
+        try { currentSource.stop(); } catch(e) {}
+        currentSource = null;
+    }
+
     try {
         const binary = atob(base64Audio);
         const bytes = new Uint8Array(binary.length);
@@ -195,6 +204,8 @@ async function playAudio(base64Audio) {
                 const source = audioCtx.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(audioCtx.destination);
+                currentSource = source;
+                source.onended = () => { currentSource = null; };
                 source.start(0);
                 await new Promise(resolve => { source.onended = resolve; });
                 return;
@@ -207,6 +218,8 @@ async function playAudio(base64Audio) {
         const blob = new Blob([bytes], { type: 'audio/mp3' });
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
+        currentSource = audio;
+        audio.onended = () => { currentSource = null; URL.revokeObjectURL(url); };
         await audio.play();
         await new Promise(resolve => { audio.onended = resolve; });
         URL.revokeObjectURL(url);
