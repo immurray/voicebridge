@@ -399,7 +399,7 @@ class TestDebugEndpoints:
             assert field in data, f"Missing field: {field}"
 
     def test_debug_status_keys_masked(self):
-        """Debug endpoint masks API keys (shows only first 8 chars)."""
+        """Debug endpoint masks API keys — shows 'MISSING' or ends with '...'."""
         from fastapi.testclient import TestClient
         from app.main import app
 
@@ -407,9 +407,10 @@ class TestDebugEndpoints:
         resp = client.get("/debug/status")
         data = resp.json()
 
-        # Keys should end with "..." indicating masking
-        assert data["deepgram_key"].endswith("...")
-        assert data["openai_key"].endswith("...")
+        # In CI (no .env), keys show "MISSING"
+        # In prod, keys show first 8 chars + "..."
+        assert data["deepgram_key"] in ("MISSING",) or data["deepgram_key"].endswith("...")
+        assert data["openai_key"] in ("MISSING",) or data["openai_key"].endswith("...")
 
     def test_ops_check_update_endpoint(self):
         """GET /ops/check-update returns structure even if ghcr unreachable."""
