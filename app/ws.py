@@ -55,13 +55,29 @@ async def translate_endpoint(ws: WebSocket):
     dg_task = None
     dg_ws = None
 
-    def _resolve_direction(detected: str) -> tuple[str, str] | None:
-        """Resolve translation direction from detected language.
-        Returns (src, tgt) or None if language unknown."""
-        code = DG_REVERSE.get(detected, detected.split("-")[0] if "-" in detected else detected)
-        if code == source_lang:
+    def _detect_lang(text: str) -> str | None:
+        """Heuristic language detection — checks for CJK characters.
+        Returns 'zh' if Chinese detected, None otherwise.
+        Used as fallback since Deepgram detect_language not available on this plan."""
+        for ch in text:
+            cp = ord(ch)
+            if (0x4E00 <= cp <= 0x9FFF or    # CJK Unified
+                0x3400 <= cp <= 0x4DBF or     # CJK Extended A
+                0xF900 <= cp <= 0xFAFF or     # CJK Compatibility
+                0x2F800 <= cp <= 0x2FA1F):    # CJK Compatibility Supplement
+                return "zh"
+        return None
+
+    def _resolve_direction(text: str) -> tuple[str, str] | None:
+        """Resolve translation direction from transcript text.
+        Uses heuristic CJK detection since Deepgram detect_language unavailable."""
+        detected = _detect_lang(text)
+        if detected == "zh":
+            return (source_lang, target_lang) if source_lang == "zh" else (target_lang, source_lang)
+        # Non-Chinese text → assume it's the non-zh language
+        if source_lang != "zh":
             return (source_lang, target_lang)
-        if code == target_lang:
+        if target_lang != "zh":
             return (target_lang, source_lang)
         return None
 
@@ -72,7 +88,7 @@ async def translate_endpoint(ws: WebSocket):
             dg_url = (
                 f"wss://api.deepgram.com/v1/listen"
                 f"?model=nova-2"
-                f"&detect_language=true"
+                f"&language=multi"
                 f"&smart_format=true"
                 f"&interim_results=true"
                 f"&encoding=linear16"
@@ -131,15 +147,14 @@ async def translate_endpoint(ws: WebSocket):
 
                     # Resolve translation direction
                     if bidirectional:
-                        detected = channel.get("detected_language", "")
-                        direction = _resolve_direction(detected) if detected else None
+                        direction = _resolve_direction(transcript)
                         if direction is None:
                             # Can't determine direction — send interim to show what was heard
                             if is_final or speech_final:
                                 await ws.send_text(json.dumps({
                                     "type": "interim",
                                     "text": transcript,
-                                    "lang": detected,
+                                    "lang": _detect_lang(transcript) or "?",
                                 }, ensure_ascii=False))
                             continue
                         src, tgt = direction
