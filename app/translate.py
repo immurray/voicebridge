@@ -1,4 +1,4 @@
-# VoiceBridge — Translation (GPT-4o-mini)
+# VoiceBridge — Translation (DeepSeek, multi-language)
 from openai import OpenAI
 from app.config import settings
 
@@ -7,29 +7,34 @@ client = OpenAI(
     base_url=settings.openai_base_url,
 )
 
+# Language display names for prompt construction
+LANG_NAMES = {
+    "zh": "Chinese",
+    "en": "English",
+    "es": "Spanish",
+    "ar": "Arabic",
+    "pt": "Portuguese",
+}
+
 
 def translate(text: str, source_lang: str, target_lang: str) -> str:
-    """翻译文本 — 中文↔英文双向"""
+    """Translate text between any supported language pair."""
     if not text.strip():
         return ""
 
-    lang_pair = f"{source_lang}→{target_lang}"
+    src_name = LANG_NAMES.get(source_lang, source_lang)
+    tgt_name = LANG_NAMES.get(target_lang, target_lang)
 
-    prompt_map = {
-        "zh→en": "Translate the following Chinese to natural, conversational English. "
-                  "Keep it brief and natural. Only return the translation, nothing else.\n\n"
-                  f'Chinese: "{text}"\nEnglish:',
-        "en→zh": "将以下英文翻译成自然地道的中文口语。"
-                  "保持简洁自然。只返回翻译结果，不要加任何其他内容。\n\n"
-                  f'English: "{text}"\n中文：',
-    }
-
-    system_prompt = prompt_map.get(lang_pair, prompt_map["zh→en"])
+    prompt = (
+        f"Translate the following {src_name} to {tgt_name}. "
+        f"Keep it brief and conversational. Only return the translation, nothing else.\n\n"
+        f'{src_name}: "{text}"\n{tgt_name}:'
+    )
 
     try:
         resp = client.chat.completions.create(
             model=settings.openai_model,
-            messages=[{"role": "user", "content": system_prompt}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=200,
         )
