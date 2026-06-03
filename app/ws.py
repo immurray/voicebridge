@@ -101,6 +101,8 @@ async def translate_endpoint(ws: WebSocket):
             f"&language={lang_code}"
             f"&smart_format=true"
             f"&interim_results=true"
+            f"&endpointing=5000"  # 5s silence before ending utterance — survives TTS playback gaps
+            f"&utterance_end_ms=5000"  # same, explicit parameter
             f"&encoding=linear16"
             f"&sample_rate=16000"
             f"&channels=1"
@@ -271,8 +273,9 @@ async def translate_endpoint(ws: WebSocket):
                 if dg_ws:
                     try:
                         await dg_ws.send(audio)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"[AudioSend] dg_ws.send failed: {e}")
+                        dg_ws = None  # trigger dg_loop reconnect
 
             elif "text" in data:
                 msg = json.loads(data["text"])
