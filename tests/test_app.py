@@ -21,7 +21,7 @@ def test_translate_empty():
     try:
         from app.translate import translate
     except ImportError:
-        pytest.skip("openai SDK not installed")
+        pytest.skip("deepl SDK not installed")
     result = translate("", "zh", "en")
     assert result == ""
 
@@ -31,7 +31,7 @@ def test_translate_zh_en():
     try:
         from app.translate import translate
     except ImportError:
-        pytest.skip("openai SDK not installed")
+        pytest.skip("deepl SDK not installed")
     result = translate("你好", "zh", "en")
     assert isinstance(result, str)
     assert len(result) > 0

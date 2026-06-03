@@ -11,10 +11,8 @@ class Settings:
     # Deepgram ASR
     deepgram_api_key: str = field(default_factory=lambda: os.getenv("DEEPGRAM_API_KEY", ""))
 
-    # OpenAI (GPT-4o-mini for translation)
-    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
-    openai_model: str = field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    openai_base_url: str = field(default_factory=lambda: os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
+    # DeepL Translation
+    deepl_api_key: str = field(default_factory=lambda: os.getenv("DEEPL_API_KEY", ""))
 
     # ElevenLabs TTS
     elevenlabs_api_key: str = field(default_factory=lambda: os.getenv("ELEVENLABS_API_KEY", ""))

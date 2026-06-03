@@ -4,7 +4,7 @@ import json
 import struct
 import os
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, Mock
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -369,24 +369,28 @@ class TestTranslationPipeline:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    @patch("app.translate.client.chat.completions.create")
-    def test_translate_handles_api_error(self, mock_create):
+    @patch("app.translate._get_translator")
+    def test_translate_handles_api_error(self, mock_get_translator):
         """Translation catches API errors and returns error string."""
         from app.translate import translate
 
-        mock_create.side_effect = Exception("API rate limit exceeded")
+        mock_translator = Mock()
+        mock_translator.translate_text.side_effect = Exception("API rate limit exceeded")
+        mock_get_translator.return_value = mock_translator
 
         result = translate("你好", "zh", "en")
         assert result.startswith("[Translation error:")
         assert "API rate limit exceeded" in result
 
-    @patch("app.translate.client.chat.completions.create")
-    def test_translate_handles_timeout(self, mock_create):
+    @patch("app.translate._get_translator")
+    def test_translate_handles_timeout(self, mock_get_translator):
         """Translation catches timeout errors gracefully."""
         from app.translate import translate
         import requests
 
-        mock_create.side_effect = requests.Timeout("Connection timed out")
+        mock_translator = Mock()
+        mock_translator.translate_text.side_effect = requests.Timeout("Connection timed out")
+        mock_get_translator.return_value = mock_translator
 
         result = translate("你好", "zh", "en")
         assert result.startswith("[Translation error:")
