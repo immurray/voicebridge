@@ -9,6 +9,7 @@ let useSpeaker = true;
 let sentChunks = 0;
 let micLevel = 0;
 let micGain = 2.0;  // Mic gain multiplier
+let transcriptHistory = [];
 
 // DOM
 const startBtn = document.getElementById('startBtn');
@@ -54,6 +55,13 @@ async function start() {
     setStatus('connecting', '● 连接中...');
     ws = new WebSocket(WS_URL);
     ws.binaryType = 'arraybuffer';
+
+    // Warm up audio subsystem — bypass autoplay policy
+    (async () => {
+        const warmup = new Audio();
+        warmup.volume = 0.001;
+        try { await warmup.play(); warmup.remove(); } catch(e) {}
+    })();
 
     ws.onopen = () => {
         ws.send(JSON.stringify({ type: 'config', source_lang: sourceLang.value, target_lang: targetLang.value }));
@@ -179,6 +187,23 @@ async function playAudio(base64Audio) {
         const binary = atob(base64Audio);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+        // Try AudioContext decoding (more reliable, bypasses autoplay)
+        if (audioCtx && audioCtx.state === 'running') {
+            try {
+                const audioBuffer = await audioCtx.decodeAudioData(bytes.buffer.slice(0));
+                const source = audioCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioCtx.destination);
+                source.start(0);
+                await new Promise(resolve => { source.onended = resolve; });
+                return;
+            } catch (e) {
+                console.warn('AudioContext playback failed, falling back to <audio>:', e.message);
+            }
+        }
+
+        // Fallback: HTML Audio element
         const blob = new Blob([bytes], { type: 'audio/mp3' });
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
@@ -186,14 +211,14 @@ async function playAudio(base64Audio) {
         await new Promise(resolve => { audio.onended = resolve; });
         URL.revokeObjectURL(url);
     } catch (e) {
-        // Audio playback failed — result already shown as text
+        console.error('Audio playback failed:', e.message);
     }
 }
 
 function addHistory(original, translated) {
-    history.unshift({ original, translated });
-    if (history.length > 20) history.pop();
-    historyList.innerHTML = history.map(h =>
+    transcriptHistory.unshift({ original, translated });
+    if (transcriptHistory.length > 20) transcriptHistory.pop();
+    historyList.innerHTML = transcriptHistory.map(h =>
         `<div class="history-item"><div class="hi-original">${h.original}</div><div class="hi-translated">${h.translated}</div></div>`
     ).join('');
 }
