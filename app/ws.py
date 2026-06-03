@@ -86,7 +86,7 @@ async def translate_endpoint(ws: WebSocket):
         if bidirectional:
             return (
                 f"wss://api.deepgram.com/v1/listen"
-                f"?model=nova-2"
+                f"?model=nova-3"
                 f"&language=multi"
                 f"&smart_format=true"
                 f"&interim_results=true"
@@ -269,6 +269,11 @@ async def translate_endpoint(ws: WebSocket):
 
     except WebSocketDisconnect:
         logger.info("[WS] Client disconnected")
+    except RuntimeError as e:
+        if "disconnect" in str(e).lower():
+            logger.info("[WS] Client disconnected (runtime)")
+        else:
+            logger.error(f"[WS RuntimeError] {e}")
     except Exception as e:
         logger.error(f"[WS Error] {e}")
     finally:
