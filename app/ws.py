@@ -1,4 +1,4 @@
-# VoiceBridge v2.2 — Bidirectional Streaming ASR
+# VoiceBridge v2.3 — Bidirectional Streaming ASR with Explicit Language Switching
 import json
 import struct
 import base64
@@ -18,12 +18,12 @@ diag = {
 }
 
 LANG_MAP_DG = {"zh": "zh-CN", "en": "en-US", "es": "es", "ar": "ar", "pt": "pt-BR"}
-# Reverse: Deepgram language codes → our codes
-DG_REVERSE = {v: k for k, v in LANG_MAP_DG.items()}
-DG_REVERSE.update({
-    "zh": "zh", "en": "en", "es": "es", "ar": "ar", "pt": "pt",
-    "zh-CN": "zh", "en-US": "en",
-})
+DG_REVERSE = {
+    "zh": "zh", "zh-CN": "zh",
+    "en": "en", "en-US": "en",
+    "es": "es", "ar": "ar",
+    "pt": "pt", "pt-BR": "pt",
+}
 
 
 @router.get("/debug/status")
@@ -43,9 +43,22 @@ async def debug_status():
     }
 
 
+def _detect_lang(text: str) -> str | None:
+    """Heuristic language detection — checks for CJK characters.
+    Returns 'zh' if Chinese detected, None otherwise."""
+    for ch in text:
+        cp = ord(ch)
+        if (0x4E00 <= cp <= 0x9FFF or
+            0x3400 <= cp <= 0x4DBF or
+            0xF900 <= cp <= 0xFAFF or
+            0x2F800 <= cp <= 0x2FA1F):
+            return "zh"
+    return None
+
+
 @router.websocket("/ws/translate")
 async def translate_endpoint(ws: WebSocket):
-    """WebSocket — bidirectional streaming ASR pipeline."""
+    """WebSocket — bidirectional streaming ASR pipeline with explicit language switching."""
     await ws.accept()
     logger.info("[WS] Client connected")
 
@@ -54,68 +67,56 @@ async def translate_endpoint(ws: WebSocket):
     bidirectional = False
     dg_task = None
     dg_ws = None
-
-    def _detect_lang(text: str) -> str | None:
-        """Heuristic language detection — checks for CJK characters.
-        Returns 'zh' if Chinese detected, None otherwise.
-        Used as fallback since Deepgram detect_language not available on this plan."""
-        for ch in text:
-            cp = ord(ch)
-            if (0x4E00 <= cp <= 0x9FFF or    # CJK Unified
-                0x3400 <= cp <= 0x4DBF or     # CJK Extended A
-                0xF900 <= cp <= 0xFAFF or     # CJK Compatibility
-                0x2F800 <= cp <= 0x2FA1F):    # CJK Compatibility Supplement
-                return "zh"
-        return None
+    current_dg_lang = "zh-CN"  # Track current Deepgram language for switching
 
     def _resolve_direction(text: str) -> tuple[str, str] | None:
-        """Resolve translation direction from transcript text.
-        Uses heuristic CJK detection since Deepgram detect_language unavailable."""
+        """Resolve translation direction from transcript text."""
         detected = _detect_lang(text)
         if detected == "zh":
-            return (source_lang, target_lang) if source_lang == "zh" else (target_lang, source_lang)
-        # Non-Chinese text → assume it's the non-zh language
+            if source_lang == "zh":
+                return (source_lang, target_lang)
+            else:
+                return (target_lang, source_lang)
+        # Non-CJK text
         if source_lang != "zh":
             return (source_lang, target_lang)
         if target_lang != "zh":
             return (target_lang, source_lang)
         return None
 
-    def _build_dg_url() -> str:
-        """Build Deepgram WebSocket URL from current settings."""
-        if bidirectional:
-            return (
-                f"wss://api.deepgram.com/v1/listen"
-                f"?model=nova-3"
-                f"&language=multi"
-                f"&smart_format=true"
-                f"&interim_results=true"
-                f"&encoding=linear16"
-                f"&sample_rate=16000"
-                f"&channels=1"
-            )
-        else:
-            dg_lang = LANG_MAP_DG.get(source_lang, "zh-CN")
-            return (
-                f"wss://api.deepgram.com/v1/listen"
-                f"?model=nova-2"
-                f"&language={dg_lang}"
-                f"&smart_format=true"
-                f"&interim_results=true"
-                f"&encoding=linear16"
-                f"&sample_rate=16000"
-                f"&channels=1"
-            )
+    def _build_dg_url(dg_lang: str | None = None) -> str:
+        """Build Deepgram WebSocket URL. 
+        In bidirectional mode, uses explicit language (not 'multi') with nova-3.
+        Language switching happens by restarting connection with new dg_lang."""
+        nonlocal current_dg_lang
+        
+        if dg_lang is not None:
+            current_dg_lang = dg_lang
+        
+        lang_code = current_dg_lang if bidirectional else LANG_MAP_DG.get(source_lang, "zh-CN")
+        
+        return (
+            f"wss://api.deepgram.com/v1/listen"
+            f"?model=nova-3"
+            f"&language={lang_code}"
+            f"&smart_format=true"
+            f"&interim_results=true"
+            f"&encoding=linear16"
+            f"&sample_rate=16000"
+            f"&channels=1"
+        )
 
     async def dg_loop():
-        """Keep Deepgram connection alive for the entire session.
-        Auto-reconnects on drop. No endpointing — stays open indefinitely."""
-        nonlocal dg_ws
+        """Keep Deepgram connection alive. Auto-switches language in bidirectional mode."""
+        nonlocal dg_ws, current_dg_lang
         import websockets as ws_lib
         from app.translate import translate
         from app.tts import text_to_speech
 
-        while True:
+        reconnect_count = 0
+        max_reconnects = 10
+
+        while reconnect_count < max_reconnects:
             dg_url = _build_dg_url()
             try:
                 async with ws_lib.connect(
@@ -125,8 +126,9 @@ async def translate_endpoint(ws: WebSocket):
                     close_timeout=5,
                 ) as dg:
                     dg_ws = dg
-                    mode = "bidirectional" if bidirectional else f"lang={source_lang}"
+                    mode = f"bidirectional(dg={current_dg_lang})" if bidirectional else f"lang={source_lang}"
                     logger.info(f"[Deepgram] Connected ({mode})")
+                    reconnect_count = 0  # reset on successful connection
 
                     async for raw in dg:
                         try:
@@ -146,6 +148,24 @@ async def translate_endpoint(ws: WebSocket):
 
                         is_final = result.get("is_final", False)
                         speech_final = result.get("speech_final", False)
+
+                        # Language switching in bidirectional mode
+                        if bidirectional and (is_final or speech_final):
+                            detected = _detect_lang(transcript)
+                            if detected == "zh" and current_dg_lang != "zh-CN":
+                                logger.info(f"[LangSwitch] → zh-CN (detected Chinese: {transcript[:40]})")
+                                break  # Break inner loop → reconnect with zh-CN
+                            elif detected is None and current_dg_lang == "zh-CN":
+                                # Switch to non-zh language
+                                non_zh = LANG_MAP_DG.get(
+                                    source_lang if source_lang != "zh" else target_lang, "en-US"
+                                )
+                                if non_zh != current_dg_lang:
+                                    logger.info(f"[LangSwitch] → {non_zh} (detected non-Chinese: {transcript[:40]})")
+                                    current_dg_lang = non_zh
+                                    break  # Break inner loop → reconnect
+                            # Also switch if current_lang doesn't match source/target for extended period
+                            # but only on final results to avoid flapping
 
                         # Resolve translation direction
                         if bidirectional:
@@ -218,15 +238,16 @@ async def translate_endpoint(ws: WebSocket):
 
             except ws_lib.exceptions.ConnectionClosed:
                 logger.info("[Deepgram] Connection closed, reconnecting...")
+                reconnect_count += 1
             except Exception as e:
                 logger.error(f"[Deepgram] Error: {e}, reconnecting in 1s...")
                 diag["last_asr_error"] = str(e)[:200]
+                reconnect_count += 1
                 await asyncio.sleep(1)
             finally:
                 dg_ws = None
 
     try:
-        # Start Deepgram connection on first audio
         dg_started = False
 
         while True:
@@ -239,8 +260,11 @@ async def translate_endpoint(ws: WebSocket):
 
                 diag["audio_chunks"] += 1
 
-                # Start Deepgram connection once, keep alive for entire session
                 if not dg_started:
+                    # Initialize language for bidirectional mode
+                    if bidirectional:
+                        current_dg_lang = LANG_MAP_DG.get(source_lang, "zh-CN")
+                        logger.info(f"[Init] Bidirectional start with dg_lang={current_dg_lang}")
                     dg_task = asyncio.create_task(dg_loop())
                     dg_started = True
 
@@ -261,9 +285,12 @@ async def translate_endpoint(ws: WebSocket):
                     target_lang = msg.get("target_lang", target_lang)
                     bidirectional = msg.get("bidirectional", bidirectional)
                     logger.info(f"[Config] {source_lang}→{target_lang} bidirectional={bidirectional}")
+                    
                     # Restart with new settings
                     if dg_task and not dg_task.done():
                         dg_task.cancel()
+                    if bidirectional:
+                        current_dg_lang = LANG_MAP_DG.get(source_lang, "zh-CN")
                     dg_task = asyncio.create_task(dg_loop())
                     dg_started = True
 
