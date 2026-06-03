@@ -94,7 +94,7 @@ async def translate_endpoint(ws: WebSocket):
                 f"&encoding=linear16"
                 f"&sample_rate=16000"
                 f"&channels=1"
-                f"&endpointing=300"
+                f"&endpointing=10000"
             )
         else:
             dg_lang = LANG_MAP_DG.get(source_lang, "zh-CN")
@@ -107,7 +107,7 @@ async def translate_endpoint(ws: WebSocket):
                 f"&encoding=linear16"
                 f"&sample_rate=16000"
                 f"&channels=1"
-                f"&endpointing=300"
+                f"&endpointing=10000"
             )
 
         import websockets as ws_lib
@@ -241,7 +241,13 @@ async def translate_endpoint(ws: WebSocket):
 
                 if dg_task is None or dg_task.done():
                     dg_task = asyncio.create_task(start_dg_stream())
-                    await asyncio.sleep(0)
+                    # Wait for Deepgram connection to be ready (up to 5s)
+                    for _ in range(50):
+                        if dg_ws is not None:
+                            break
+                        await asyncio.sleep(0.1)
+                    else:
+                        logger.warning("[WS] Deepgram connection timeout, dropping chunk")
 
                 if dg_ws:
                     try:

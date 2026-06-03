@@ -529,6 +529,6 @@ class TestMiddleware:
         client = TestClient(app)
         resp = client.get("/")
         assert resp.status_code == 200
-        # HTML should NOT have forced no-cache
+        # HTML SHOULD have no-cache (we added it to prevent proxy caching)
         cc = resp.headers.get("cache-control", "")
-        assert "must-revalidate" not in cc
+        assert "must-revalidate" in cc
