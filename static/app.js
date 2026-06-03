@@ -11,6 +11,7 @@ let micLevel = 0;
 let micGain = 2.0;  // Mic gain multiplier
 let transcriptHistory = [];
 let currentSource = null;  // Active TTS source for interruption
+let micResumeTime = 0;     // Timestamp: mic stays muted until this time
 
 // DOM
 const startBtn = document.getElementById('startBtn');
@@ -108,6 +109,7 @@ async function start() {
             const workletNode = new AudioWorkletNode(audioCtx, 'voice-processor');
             workletNode.port.onmessage = (e) => {
                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                if (currentSource || Date.now() < micResumeTime) return;  // Mic muted during TTS
                 const pcm = e.data;
                 if (pcm.byteLength < 100) return;
                 sentChunks++;
@@ -150,6 +152,7 @@ function setupScriptProcessor(sourceNode) {
 
     processor.onaudioprocess = (e) => {
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (currentSource || Date.now() < micResumeTime) return;  // Mic muted during TTS
         const input = e.inputBuffer.getChannelData(0);
 
         // RMS (root mean square) for diagnostic display only
@@ -164,6 +167,7 @@ function setupScriptProcessor(sourceNode) {
 function stop() {
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     if (currentSource) { try { currentSource.stop(); } catch(e) {} currentSource = null; }
+    micResumeTime = 0;
     if (audioCtx) { audioCtx.close(); audioCtx = null; }
     if (ws) { ws.close(); ws = null; }
     isRunning = false;
@@ -191,6 +195,7 @@ async function playAudio(base64Audio) {
         try { currentSource.stop(); } catch(e) {}
         currentSource = null;
     }
+    micResumeTime = 0;  // User is speaking now, unmute mic
 
     try {
         const binary = atob(base64Audio);
@@ -205,7 +210,10 @@ async function playAudio(base64Audio) {
                 source.buffer = audioBuffer;
                 source.connect(audioCtx.destination);
                 currentSource = source;
-                source.onended = () => { currentSource = null; };
+                source.onended = () => {
+                    currentSource = null;
+                    micResumeTime = Date.now() + 200;  // 200ms room echo buffer
+                };
                 source.start(0);
                 await new Promise(resolve => { source.onended = resolve; });
                 return;
@@ -219,7 +227,11 @@ async function playAudio(base64Audio) {
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         currentSource = audio;
-        audio.onended = () => { currentSource = null; URL.revokeObjectURL(url); };
+        audio.onended = () => {
+            currentSource = null;
+            micResumeTime = Date.now() + 200;
+            URL.revokeObjectURL(url);
+        };
         await audio.play();
         await new Promise(resolve => { audio.onended = resolve; });
         URL.revokeObjectURL(url);
