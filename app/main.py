@@ -34,12 +34,12 @@ app.include_router(ws_router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.2.0"}
+    return {"status": "ok", "version": "0.3.0"}
 
 
 @app.get("/version")
 async def version():
-    return {"version": "0.2.0", "build": os.getenv("BUILD_COMMIT", "dev")}
+    return {"version": "0.3.0", "build": os.getenv("BUILD_COMMIT", "dev")}
 
 
 BUILD_COMMIT = os.getenv("BUILD_COMMIT", "unknown")
