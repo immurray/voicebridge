@@ -215,7 +215,6 @@ async function playAudio(base64Audio) {
         try { currentSource.stop(); } catch(e) {}
         currentSource = null;
     }
-    micResumeTime = 0;  // User is speaking now, unmute mic
 
     try {
         const binary = atob(base64Audio);
@@ -230,12 +229,13 @@ async function playAudio(base64Audio) {
                 source.buffer = audioBuffer;
                 source.connect(audioCtx.destination);
                 currentSource = source;
+                // Single onended handler — no overwrite, no await blocking
                 source.onended = () => {
                     currentSource = null;
                     micResumeTime = Date.now() + 200;  // 200ms room echo buffer
                 };
                 source.start(0);
-                await new Promise(resolve => { source.onended = resolve; });
+                // DO NOT await — let TTS play asynchronously
                 return;
             } catch (e) {
                 console.warn('AudioContext playback failed, falling back to <audio>:', e.message);
@@ -247,14 +247,14 @@ async function playAudio(base64Audio) {
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         currentSource = audio;
+        // Single onended handler
         audio.onended = () => {
             currentSource = null;
             micResumeTime = Date.now() + 200;
             URL.revokeObjectURL(url);
         };
-        await audio.play();
-        await new Promise(resolve => { audio.onended = resolve; });
-        URL.revokeObjectURL(url);
+        try { await audio.play(); } catch(e) { console.warn('audio.play failed:', e.message); }
+        // DO NOT await onended — non-blocking
     } catch (e) {
         console.error('Audio playback failed:', e.message);
     }
