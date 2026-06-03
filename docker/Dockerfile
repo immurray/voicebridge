@@ -20,7 +20,7 @@ COPY app/ ./app/
 COPY static/ ./static/
 
 # Inject build commit into HTML for cache busting
-RUN sed -i "s/__BUILD_COMMIT__/${GIT_SHA}/g" static/index.html
+RUN TS=$(date +%s) && sed -i "s/__BUILD_COMMIT__/${GIT_SHA}/g" static/index.html && sed -i "s/__CACHE_BUST__/${TS}/g" static/index.html
 
 EXPOSE 8000
 

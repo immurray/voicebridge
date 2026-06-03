@@ -169,4 +169,50 @@ async def check_update():
 # Static files — MUST be last to avoid eating API routes
 static_dir = Path(__file__).parent.parent / "static"
 static_dir.mkdir(exist_ok=True)
+
+# Explicit routes for cache-busted JS/CSS to bypass nginx cache
+from fastapi.responses import FileResponse
+import time as _time
+
+@app.get("/app.js")
+async def app_js():
+    """Serve app.js with aggressive no-cache to defeat proxy caching."""
+    return FileResponse(
+        static_dir / "app.js",
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "ETag": os.getenv("BUILD_COMMIT", str(int(_time.time()))),
+        }
+    )
+
+@app.get("/style.css")
+async def style_css():
+    """Serve style.css with aggressive no-cache."""
+    return FileResponse(
+        static_dir / "style.css",
+        media_type="text/css",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "ETag": os.getenv("BUILD_COMMIT", str(int(_time.time()))),
+        }
+    )
+
+@app.get("/processor.js")
+async def processor_js():
+    """Serve processor.js (AudioWorklet) with aggressive no-cache."""
+    return FileResponse(
+        static_dir / "processor.js",
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
+
 app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
