@@ -1,17 +1,14 @@
-// VoiceBridge v2 — Solo Translation
+// VoiceBridge v2.1 — Streaming ASR + AudioWorklet
 const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws/translate`;
 
 let ws = null;
 let stream = null;
 let audioCtx = null;
 let isRunning = false;
-let isBusy = false;  // Don't overwrite status during translation
-let history = [];
 let useSpeaker = true;
 let sentChunks = 0;
-let srvChunks = 0;
-let srvTrans = 0;
 let micLevel = 0;
+let micGain = 2.0;  // Mic gain multiplier
 
 // DOM
 const startBtn = document.getElementById('startBtn');
@@ -24,7 +21,6 @@ const outputToggle = document.getElementById('outputToggle');
 const sourceLang = document.getElementById('sourceLang');
 const targetLang = document.getElementById('targetLang');
 
-// Fetch version on load
 fetch('/version')
     .then(r => r.json())
     .then(v => {
@@ -33,17 +29,25 @@ fetch('/version')
     .catch(() => {});
 
 startBtn.addEventListener('click', () => isRunning ? stop() : start());
-
 outputToggle.addEventListener('click', () => {
     useSpeaker = !useSpeaker;
     outputToggle.textContent = useSpeaker ? '🔊 扬声器' : '🎧 耳机';
 });
 
 async function start() {
+    const constraints = {
+        audio: {
+            sampleRate: 16000,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+        }
+    };
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (e) {
-        alert('需要麦克风权限');
+        alert('需要麦克风权限: ' + e.message);
         return;
     }
 
@@ -52,7 +56,6 @@ async function start() {
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
-        updateDiag();
         ws.send(JSON.stringify({ type: 'config', source_lang: sourceLang.value, target_lang: targetLang.value }));
     };
 
@@ -60,72 +63,89 @@ async function start() {
         if (typeof event.data !== 'string') return;
         const msg = JSON.parse(event.data);
 
-        if (msg.type === 'result') {
-            isBusy = true;
+        if (msg.type === 'interim') {
+            // Real-time streaming transcript
+            setStatus('interim', `🎯 "${msg.text.slice(0, 30)}"`);
+        } else if (msg.type === 'recognized') {
+            setStatus('recognized', `🎯 识别: "${msg.text.slice(0, 30)}"`);
+        } else if (msg.type === 'result') {
             setStatus('playing', `🔊 "${msg.translated.slice(0, 30)}"`);
             showResult(msg.original, msg.translated);
             addHistory(msg.original, msg.translated);
-            playAudio(msg.audio).then(() => {
-                isBusy = false;
-                updateDiag();
-            }).catch(() => {
-                isBusy = false;
-                setStatus('listening', `🎙 播放失败 | mic:${micLevel.toFixed(2)} 发:${sentChunks}`);
-            });
-        } else if (msg.type === 'status' && msg.state === 'recognized') {
-            isBusy = true;
-            setStatus('recognized', `🎯 识别: "${msg.text.slice(0, 30)}"`);
+            if (msg.audio) {
+                playAudio(msg.audio);
+            }
         }
     };
 
     ws.onclose = () => { if (isRunning) setStatus('error', '⚠ 连接断开'); };
     ws.onerror = () => { setStatus('error', '⚠ 连接失败'); };
 
-    // Audio capture
+    // Audio processing — use AudioWorklet if available, fallback to ScriptProcessorNode
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     if (audioCtx.state === 'suspended') await audioCtx.resume();
 
     const source = audioCtx.createMediaStreamSource(stream);
-    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-    const zeroGain = audioCtx.createGain();
-    zeroGain.gain.value = 0;
-    source.connect(processor);
-    processor.connect(zeroGain);
-    zeroGain.connect(audioCtx.destination);
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = micGain;
+    source.connect(gainNode);
 
     sentChunks = 0;
-    srvChunks = 0;
-    srvTrans = 0;
-    isBusy = false;
 
-    processor.onaudioprocess = (e) => {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        const input = e.inputBuffer.getChannelData(0);
-        micLevel = Math.sqrt(input.reduce((sum, v) => sum + v * v, 0) / input.length);
-        if (micLevel < 0.0005) return;
-        sentChunks++;
-        ws.send(float32ToPCM16(input).buffer);
-    };
+    if (audioCtx.audioWorklet) {
+        // Modern AudioWorklet path
+        try {
+            await audioCtx.audioWorklet.addModule('/processor.js');
+            const workletNode = new AudioWorkletNode(audioCtx, 'voice-processor');
+            workletNode.port.onmessage = (e) => {
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                const pcm = e.data;
+                if (pcm.byteLength < 100) return;
+                sentChunks++;
+                ws.send(pcm);
+            };
+            gainNode.connect(workletNode);
+            workletNode.connect(audioCtx.destination);
+        } catch (e) {
+            console.warn('AudioWorklet failed, using ScriptProcessorNode fallback:', e.message);
+            setupScriptProcessor(gainNode);
+        }
+    } else {
+        setupScriptProcessor(gainNode);
+    }
 
     isRunning = true;
     startBtn.textContent = '⏹ 停止';
     startBtn.classList.add('active');
 
-    // Diagnostic — only update when idle
+    // Diagnostic update
     const diagTimer = setInterval(() => {
         if (!isRunning) { clearInterval(diagTimer); return; }
-        if (!isBusy) updateDiag();
-    }, 2000);
+        fetch('/debug/status').then(r => r.json()).then(d => {
+            setStatus('listening', `🎙 发:${sentChunks} | 收:${d.audio_chunks_received} | 识:${d.transcripts_detected}`);
+        }).catch(() => {});
+    }, 3000);
 }
 
-async function updateDiag() {
-    try {
-        const r = await fetch('/debug/status');
-        const d = await r.json();
-        srvChunks = d.audio_chunks_received || 0;
-        srvTrans = d.transcripts_detected || 0;
-    } catch(e) {}
-    setStatus('listening', `🎙 mic:${micLevel.toFixed(2)} | 发:${sentChunks} | 收:${srvChunks} | 识:${srvTrans}`);
+function setupScriptProcessor(sourceNode) {
+    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    const zeroGain = audioCtx.createGain();
+    zeroGain.gain.value = 0;
+    sourceNode.connect(processor);
+    processor.connect(zeroGain);
+    zeroGain.connect(audioCtx.destination);
+
+    processor.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const input = e.inputBuffer.getChannelData(0);
+
+        // RMS (root mean square) for diagnostic display only
+        micLevel = Math.sqrt(input.reduce((sum, v) => sum + v * v, 0) / input.length);
+
+        // Send ALL audio to server — let Deepgram handle silence detection
+        sentChunks++;
+        ws.send(float32ToPCM16(input).buffer);
+    };
 }
 
 function stop() {
@@ -150,20 +170,20 @@ function showResult(original, translated) {
 }
 
 async function playAudio(base64Audio) {
-    const binary = atob(base64Audio);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const blob = new Blob([bytes], { type: 'audio/mp3' });
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    await new Promise((resolve, reject) => {
-        audio.oncanplaythrough = resolve;
-        audio.onerror = reject;
-        setTimeout(() => reject(new Error('timeout')), 3000);
-    });
-    await audio.play();
-    await new Promise(resolve => { audio.onended = resolve; });
-    URL.revokeObjectURL(url);
+    if (!base64Audio) return;
+    try {
+        const binary = atob(base64Audio);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const blob = new Blob([bytes], { type: 'audio/mp3' });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        await audio.play();
+        await new Promise(resolve => { audio.onended = resolve; });
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        // Audio playback failed — result already shown as text
+    }
 }
 
 function addHistory(original, translated) {
