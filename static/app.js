@@ -52,6 +52,7 @@ biToggle.addEventListener('click', () => {
 });
 
 async function start() {
+    console.log('[VoiceBridge] start() called, bidirectional:', bidirectional);
     const constraints = {
         audio: {
             sampleRate: 16000,
@@ -80,6 +81,7 @@ async function start() {
     })();
 
     ws.onopen = () => {
+        console.log('[VoiceBridge] WebSocket connected, sending config...');
         ws.send(JSON.stringify({ type: 'config', source_lang: sourceLang.value, target_lang: targetLang.value, bidirectional }));
     };
 
@@ -88,23 +90,25 @@ async function start() {
         const msg = JSON.parse(event.data);
 
         if (msg.type === 'interim') {
-            // Real-time streaming transcript
             setStatus('interim', `🎯 "${msg.text.slice(0, 30)}"`);
         } else if (msg.type === 'recognized') {
             setStatus('recognized', `🎯 识别: "${msg.text.slice(0, 30)}"`);
         } else if (msg.type === 'result') {
             const dir = `${msg.source_lang || '?'}→${msg.target_lang || '?'}`;
+            console.log('[VoiceBridge] Translation:', dir, msg.original.slice(0,20), '→', msg.translated.slice(0,20));
             setStatus('playing', `🔊 [${dir}] "${msg.translated.slice(0, 25)}"`);
             showResult(msg.original, msg.translated, dir);
             addHistory(msg.original, msg.translated, dir);
             if (msg.audio) {
                 playAudio(msg.audio);
             }
+        } else if (msg.type === 'error') {
+            console.error('[VoiceBridge] Server error:', msg.message);
         }
     };
 
-    ws.onclose = () => { if (isRunning) setStatus('error', '⚠ 连接断开'); };
-    ws.onerror = () => { setStatus('error', '⚠ 连接失败'); };
+    ws.onclose = (e) => { console.log('[VoiceBridge] WebSocket closed:', e.code, e.reason); if (isRunning) setStatus('error', '⚠ 连接断开'); };
+    ws.onerror = (e) => { console.error('[VoiceBridge] WebSocket error'); setStatus('error', '⚠ 连接失败'); };
 
     // Audio processing — use AudioWorklet if available, fallback to ScriptProcessorNode
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
@@ -124,10 +128,11 @@ async function start() {
             const workletNode = new AudioWorkletNode(audioCtx, 'voice-processor');
             workletNode.port.onmessage = (e) => {
                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
-                if (currentSource || Date.now() < micResumeTime) return;  // Mic muted during TTS
+                if (currentSource || Date.now() < micResumeTime) return;
                 const pcm = e.data;
                 if (pcm.byteLength < 100) return;
                 sentChunks++;
+                if (sentChunks === 1) console.log('[VoiceBridge] Audio flowing, first chunk sent');
                 ws.send(pcm);
             };
             gainNode.connect(workletNode);
