@@ -72,7 +72,7 @@ async def translate_endpoint(ws: WebSocket):
         try:
             async with ws_lib.connect(
                 dg_url,
-                extra_headers={"Authorization": f"Token {settings.deepgram_api_key}"},
+                additional_headers={"Authorization": f"Token {settings.deepgram_api_key}"},
                 ping_interval=5,
                 close_timeout=5,
             ) as dg:
