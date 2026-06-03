@@ -160,6 +160,12 @@ h1 {
     color: var(--brand);
 }
 
+.btn-outline.active {
+    border-color: var(--brand);
+    background: var(--brand);
+    color: #fff;
+}
+
 /* Main Button */
 .btn-main {
     display: block;

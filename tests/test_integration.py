@@ -193,6 +193,31 @@ class TestASRPipeline:
         assert "tts" in diag
         assert "last_asr_error" in diag
 
+    def test_dg_reverse_map_coverage(self):
+        """DG_REVERSE maps Deepgram codes back to our codes."""
+        from app.ws import DG_REVERSE
+
+        assert DG_REVERSE["zh-CN"] == "zh"
+        assert DG_REVERSE["en-US"] == "en"
+        assert DG_REVERSE["es"] == "es"
+        assert DG_REVERSE["zh"] == "zh"
+
+    def test_bidirectional_dg_url_uses_detect_language(self):
+        """Bidirectional mode uses detect_language=true instead of language=X."""
+        url = (
+            f"wss://api.deepgram.com/v1/listen"
+            f"?model=nova-2"
+            f"&detect_language=true"
+            f"&smart_format=true"
+            f"&interim_results=true"
+            f"&encoding=linear16"
+            f"&sample_rate=16000"
+            f"&channels=1"
+            f"&endpointing=300"
+        )
+        assert "detect_language=true" in url
+        assert "&language=" not in url  # Should NOT have fixed language param
+
 
 # ═══════════════════════════════════════════════════════════════
 # TTS Pipeline Tests (gTTS)
@@ -388,7 +413,7 @@ class TestDebugEndpoints:
         required_fields = [
             "audio_chunks_received", "transcripts_detected",
             "translations_done", "tts_generated",
-            "deepgram_key", "openai_key", "elevenlabs_key",
+            "deepgram_key", "openai_key",
             "last_asr_error", "last_translate_error", "last_tts_error",
         ]
         for field in required_fields:

@@ -12,6 +12,7 @@ let micGain = 2.0;  // Mic gain multiplier
 let transcriptHistory = [];
 let currentSource = null;  // Active TTS source for interruption
 let micResumeTime = 0;     // Timestamp: mic stays muted until this time
+let bidirectional = false;  // Bidirectional mode: auto-detect lang
 
 // DOM
 const startBtn = document.getElementById('startBtn');
@@ -23,6 +24,7 @@ const historyList = document.getElementById('historyList');
 const outputToggle = document.getElementById('outputToggle');
 const sourceLang = document.getElementById('sourceLang');
 const targetLang = document.getElementById('targetLang');
+const biToggle = document.getElementById('biToggle');
 
 fetch('/version')
     .then(r => r.json())
@@ -35,6 +37,18 @@ startBtn.addEventListener('click', () => isRunning ? stop() : start());
 outputToggle.addEventListener('click', () => {
     useSpeaker = !useSpeaker;
     outputToggle.textContent = useSpeaker ? '🔊 扬声器' : '🎧 耳机';
+});
+
+biToggle.addEventListener('click', () => {
+    bidirectional = !bidirectional;
+    biToggle.textContent = bidirectional ? '🔄 双向' : '➡️ 单向';
+    biToggle.classList.toggle('active', bidirectional);
+    sourceLang.disabled = bidirectional;
+    targetLang.disabled = bidirectional;
+    // Re-send config if running
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'config', source_lang: sourceLang.value, target_lang: targetLang.value, bidirectional }));
+    }
 });
 
 async function start() {
@@ -66,7 +80,7 @@ async function start() {
     })();
 
     ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'config', source_lang: sourceLang.value, target_lang: targetLang.value }));
+        ws.send(JSON.stringify({ type: 'config', source_lang: sourceLang.value, target_lang: targetLang.value, bidirectional }));
     };
 
     ws.onmessage = (event) => {
@@ -79,9 +93,10 @@ async function start() {
         } else if (msg.type === 'recognized') {
             setStatus('recognized', `🎯 识别: "${msg.text.slice(0, 30)}"`);
         } else if (msg.type === 'result') {
-            setStatus('playing', `🔊 "${msg.translated.slice(0, 30)}"`);
-            showResult(msg.original, msg.translated);
-            addHistory(msg.original, msg.translated);
+            const dir = `${msg.source_lang || '?'}→${msg.target_lang || '?'}`;
+            setStatus('playing', `🔊 [${dir}] "${msg.translated.slice(0, 25)}"`);
+            showResult(msg.original, msg.translated, dir);
+            addHistory(msg.original, msg.translated, dir);
             if (msg.audio) {
                 playAudio(msg.audio);
             }
@@ -181,9 +196,9 @@ function setStatus(state, text) {
     statusEl.textContent = text;
 }
 
-function showResult(original, translated) {
+function showResult(original, translated, dir) {
     currentCard.classList.remove('hidden');
-    currentOriginal.textContent = original;
+    currentOriginal.textContent = `[${dir}] ${original}`;
     currentTranslated.textContent = translated;
 }
 
@@ -240,11 +255,11 @@ async function playAudio(base64Audio) {
     }
 }
 
-function addHistory(original, translated) {
-    transcriptHistory.unshift({ original, translated });
+function addHistory(original, translated, dir) {
+    transcriptHistory.unshift({ original, translated, dir });
     if (transcriptHistory.length > 20) transcriptHistory.pop();
     historyList.innerHTML = transcriptHistory.map(h =>
-        `<div class="history-item"><div class="hi-original">${h.original}</div><div class="hi-translated">${h.translated}</div></div>`
+        `<div class="history-item"><div class="hi-original">[${h.dir}] ${h.original}</div><div class="hi-translated">${h.translated}</div></div>`
     ).join('');
 }
 
