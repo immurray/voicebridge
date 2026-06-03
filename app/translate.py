@@ -1,41 +1,42 @@
-# VoiceBridge — Translation (DeepL, multi-language)
-import deepl
+# VoiceBridge — Translation (Gemini Flash via OpenAI-compatible API)
+from openai import OpenAI
 from app.config import settings
 
-# DeepL language code mapping
-LANG_TO_DEEPL = {
-    "zh": "ZH",
-    "en": "EN-US",
-    "es": "ES",
-    "ar": "AR",
-    "pt": "PT-BR",
+LANG_NAMES = {
+    "zh": "Chinese",
+    "en": "English",
+    "es": "Spanish",
+    "ar": "Arabic",
+    "pt": "Portuguese",
 }
 
-_translator = None
-
-
-def _get_translator() -> deepl.Translator:
-    global _translator
-    if _translator is None:
-        _translator = deepl.Translator(settings.deepl_api_key)
-    return _translator
+client = OpenAI(
+    api_key=settings.openai_api_key,
+    base_url=settings.openai_base_url,
+)
 
 
 def translate(text: str, source_lang: str, target_lang: str) -> str:
-    """Translate text using DeepL API."""
+    """Translate via Gemini Flash (OpenAI-compatible endpoint)."""
     if not text.strip():
         return ""
 
-    src_code = LANG_TO_DEEPL.get(source_lang)
-    tgt_code = LANG_TO_DEEPL.get(target_lang, "EN-US")
+    src_name = LANG_NAMES.get(source_lang, source_lang)
+    tgt_name = LANG_NAMES.get(target_lang, target_lang)
+
+    prompt = (
+        f"Translate the following {src_name} to {tgt_name}. "
+        f"Keep it brief and conversational. Only return the translation, nothing else.\n\n"
+        f'{src_name}: "{text}"\n{tgt_name}:'
+    )
 
     try:
-        translator = _get_translator()
-        result = translator.translate_text(
-            text,
-            source_lang=src_code,
-            target_lang=tgt_code,
+        resp = client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=200,
         )
-        return result.text.strip()
+        return resp.choices[0].message.content.strip()
     except Exception as e:
         return f"[Translation error: {e}]"

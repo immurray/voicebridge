@@ -39,7 +39,7 @@ async def debug_status():
         "last_translate_error": diag["last_translate_error"],
         "last_tts_error": diag["last_tts_error"],
         "deepgram_key": settings.deepgram_api_key[:8] + "..." if settings.deepgram_api_key else "MISSING",
-        "openai_key": settings.deepl_api_key[:8] + "..." if settings.deepl_api_key else "MISSING",
+        "openai_key": settings.openai_api_key[:8] + "..." if settings.openai_api_key else "MISSING",
     }
 
 
